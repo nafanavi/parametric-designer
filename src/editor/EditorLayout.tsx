@@ -1,9 +1,11 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { useModelStore } from '@/store/modelStore';
 import { ActionToolbar } from './ActionToolbar';
 import { SourcePanel } from './SourcePanel';
 import { PropertyPanel } from './PropertyPanel';
+import { PromptPanel } from './PromptPanel';
 
 const Scene = dynamic(() => import('@/viewer/Scene').then((m) => m.Scene), {
   ssr: false,
@@ -15,6 +17,8 @@ const Scene = dynamic(() => import('@/viewer/Scene').then((m) => m.Scene), {
 });
 
 export function EditorLayout() {
+  const promptOpen = useModelStore((s) => s.promptOpen);
+
   return (
     <div className="flex flex-col h-screen bg-panel text-gray-100">
       <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-panel-2">
@@ -32,13 +36,19 @@ export function EditorLayout() {
 
       <ActionToolbar />
 
-      <main className="grid flex-1 min-h-0" style={{ gridTemplateColumns: '320px 1fr 280px' }}>
-        <SourcePanel />
-        <div className="min-h-0 min-w-0">
-          <Scene />
-        </div>
-        <PropertyPanel />
-      </main>
+      <div className="flex flex-col flex-1 min-h-0">
+        <main
+          className="grid flex-1 min-h-0"
+          style={{ gridTemplateColumns: '320px 1fr 280px' }}
+        >
+          <SourcePanel />
+          <div className="relative min-h-0 min-w-0 overflow-hidden">
+            <Scene />
+          </div>
+          <PropertyPanel />
+        </main>
+        {promptOpen && <PromptPanel />}
+      </div>
     </div>
   );
 }
