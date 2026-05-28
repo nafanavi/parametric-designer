@@ -1,5 +1,5 @@
-import type { LLMProvider } from '../types';
-import { createOpenAICompatProvider } from './openai-compatible';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import type { LanguageModelV1 } from 'ai';
 
 export interface ProviderEnv {
   readonly LLM_PROVIDER?: string;
@@ -9,26 +9,39 @@ export interface ProviderEnv {
 }
 
 export interface ProviderSelection {
-  readonly provider: LLMProvider;
-  readonly model: string;
+  readonly model: LanguageModelV1;
+  readonly modelId: string;
+  readonly providerName: string;
 }
 
 /**
- * Reads server-side env vars and returns the configured provider plus the
- * model name to send. Throws with an actionable message if required vars are
- * missing — the route handler converts that into a 503 with the message.
+ * Reads server-side env vars and returns a configured AI SDK model.
+ * Throws ProviderConfigError with an actionable message when required vars
+ * are missing — the route handler turns that into a 503/`unavailable`.
+ *
+ * All supported providers go through `@ai-sdk/openai-compatible`, which
+ * speaks OpenAI's `/chat/completions` shape. Same env-var matrix as before:
+ * Groq, Together, OpenRouter, Ollama, OpenAI — switched by `LLM_BASE_URL`.
  */
 export function selectProvider(env: ProviderEnv = process.env as ProviderEnv): ProviderSelection {
   const kind = env.LLM_PROVIDER?.trim() || 'openai-compat';
 
   switch (kind) {
     case 'openai-compat': {
-      const baseUrl = required(env.LLM_BASE_URL, 'LLM_BASE_URL');
+      const baseURL = required(env.LLM_BASE_URL, 'LLM_BASE_URL');
       const apiKey = required(env.LLM_API_KEY, 'LLM_API_KEY');
-      const model = required(env.LLM_MODEL, 'LLM_MODEL');
+      const modelId = required(env.LLM_MODEL, 'LLM_MODEL');
+
+      const provider = createOpenAICompatible({
+        name: 'openai-compat',
+        baseURL,
+        apiKey,
+      });
+
       return {
-        provider: createOpenAICompatProvider({ baseUrl, apiKey }),
-        model,
+        model: provider(modelId),
+        modelId,
+        providerName: 'openai-compat',
       };
     }
     default:

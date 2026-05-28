@@ -19,7 +19,9 @@
     "@react-three/fiber": "^8.17.10",
     "@react-three/drei": "^9.114.0",
     "zustand": "^5.0.1",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "ai": "^4.0.0",
+    "@ai-sdk/openai-compatible": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",

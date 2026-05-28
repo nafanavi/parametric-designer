@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
+import { generateText, APICallError } from 'ai';
 import { selectProvider, ProviderConfigError } from '@/model/llm/providers';
 import { SYSTEM_PROMPT, buildUserPrompt } from '@/model/llm/prompt';
 import { extractCode } from '@/model/llm/extract';
@@ -43,24 +44,15 @@ export async function POST(req: Request) {
   const timer = setTimeout(() => ac.abort(), timeoutMs);
 
   try {
-    const result = await selection.provider.generate(
-      {
-        systemPrompt: SYSTEM_PROMPT,
-        userPrompt: buildUserPrompt(parsed.data.currentSource, parsed.data.prompt),
-        model: selection.model,
-      },
-      ac.signal,
-    );
+    const { text } = await generateText({
+      model: selection.model,
+      system: SYSTEM_PROMPT,
+      prompt: buildUserPrompt(parsed.data.currentSource, parsed.data.prompt),
+      temperature: 0.2,
+      abortSignal: ac.signal,
+    });
 
-    if (result.kind === 'error') {
-      const httpStatus = result.status >= 400 && result.status < 500 ? 'unavailable' : 'error';
-      return NextResponse.json<ModelGenerationResult>(
-        { status: httpStatus, message: result.message },
-        { status: 502 },
-      );
-    }
-
-    const source = extractCode(result.text);
+    const source = extractCode(text);
     if (!source) {
       return NextResponse.json<ModelGenerationResult>(
         { status: 'error', message: 'Provider returned an empty response.' },
@@ -71,9 +63,27 @@ export async function POST(req: Request) {
     return NextResponse.json<ModelGenerationResult>({
       status: 'success',
       source,
-      message: `Updated by ${selection.provider.name}:${selection.model}.`,
+      message: `Updated by ${selection.providerName}:${selection.modelId}.`,
     });
+  } catch (err) {
+    return NextResponse.json<ModelGenerationResult>(mapError(err, timeoutMs), { status: 502 });
   } finally {
     clearTimeout(timer);
   }
+}
+
+function mapError(err: unknown, timeoutMs: number): ModelGenerationResult {
+  if (APICallError.isInstance(err)) {
+    const status = err.statusCode ?? 0;
+    const kind: ModelGenerationResult['status'] =
+      status >= 400 && status < 500 ? 'unavailable' : 'error';
+    return { status: kind, message: `Provider returned ${status || '?'}: ${err.message}` };
+  }
+  if (err instanceof Error && err.name === 'AbortError') {
+    return { status: 'error', message: `Provider timed out after ${timeoutMs}ms.` };
+  }
+  return {
+    status: 'error',
+    message: err instanceof Error ? err.message : String(err),
+  };
 }
