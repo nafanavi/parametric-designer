@@ -12,7 +12,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 const MIN_HEIGHT = 140;
-const MAX_HEIGHT_RATIO = 0.8; // up to 80% of the window
+const MIN_SOURCE_HEIGHT = 80; // leave this much for whatever sits above
 
 export function PromptPanel() {
   const setPromptOpen = useModelStore((s) => s.setPromptOpen);
@@ -21,6 +21,7 @@ export function PromptPanel() {
   const height = useModelStore((s) => s.promptHeight);
   const setHeight = useModelStore((s) => s.setPromptHeight);
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const [text, setText] = useState('');
   const [dragging, setDragging] = useState(false);
   const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
@@ -42,7 +43,9 @@ export function PromptPanel() {
   const onHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!dragRef.current) return;
     const delta = dragRef.current.startY - e.clientY; // drag up → +
-    const max = Math.floor(window.innerHeight * MAX_HEIGHT_RATIO);
+    const column = rootRef.current?.parentElement;
+    const colHeight = column?.clientHeight ?? window.innerHeight;
+    const max = Math.max(MIN_HEIGHT, colHeight - MIN_SOURCE_HEIGHT);
     const next = Math.min(max, Math.max(MIN_HEIGHT, dragRef.current.startHeight + delta));
     setHeight(next);
   };
@@ -56,7 +59,8 @@ export function PromptPanel() {
 
   return (
     <div
-      className="relative z-10 flex flex-col shrink-0 bg-panel-2 shadow-[0_-4px_12px_rgba(0,0,0,0.25)]"
+      ref={rootRef}
+      className="flex flex-col shrink-0 bg-panel-2"
       style={{ height }}
     >
       <div
@@ -83,8 +87,8 @@ export function PromptPanel() {
       </div>
 
       <div className="flex items-center justify-between px-3 h-8 border-b border-border bg-panel">
-        <div className="flex items-center gap-2">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-orange-400">
+        <div className="flex items-center gap-2 min-w-0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-orange-400 shrink-0">
             <path
               d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"
               stroke="currentColor"
@@ -94,7 +98,6 @@ export function PromptPanel() {
             />
           </svg>
           <span className="text-xs uppercase tracking-wide text-gray-200 font-medium">Prompt</span>
-          <span className="text-[10px] text-gray-500">describe a change — LLM seam</span>
         </div>
         <button
           onClick={() => setPromptOpen(false)}
@@ -114,27 +117,27 @@ export function PromptPanel() {
             send();
           }
         }}
-        placeholder="e.g. add a 600mm cabinet with two drawers at the bottom"
+        placeholder="Describe a change to the model…"
         spellCheck={false}
         className="flex-1 min-h-0 px-3 py-2 bg-panel text-gray-100 text-sm font-mono leading-relaxed resize-none outline-none"
       />
 
-      <div className="flex items-center justify-between gap-3 px-3 h-11 border-t border-border bg-panel-2">
-        <div className={`${STATUS_COLORS[status.kind] ?? 'text-gray-500'} text-xs truncate flex-1`}>
-          {status.message ?? 'Type a request and press Apply — or Ctrl/⌘+Enter.'}
+      <div className="flex flex-col gap-2 px-3 py-2 border-t border-border bg-panel-2">
+        <div className={`${STATUS_COLORS[status.kind] ?? 'text-gray-500'} text-[11px] leading-snug line-clamp-2`}>
+          {status.message ?? 'Press Apply — or Ctrl/⌘+Enter.'}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center justify-end gap-2">
           <button
             onClick={() => setText('')}
             disabled={text.length === 0 || status.kind === 'pending'}
-            className="px-3 py-1.5 rounded bg-panel hover:bg-border disabled:bg-panel disabled:text-gray-600 disabled:cursor-not-allowed border border-border text-gray-200 text-sm transition-colors"
+            className="px-3 py-1 rounded bg-panel hover:bg-border disabled:bg-panel disabled:text-gray-600 disabled:cursor-not-allowed border border-border text-gray-200 text-sm transition-colors"
           >
             Clear
           </button>
           <button
             onClick={send}
             disabled={!canSubmit}
-            className="px-4 py-1.5 rounded bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
+            className="px-3 py-1 rounded bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white text-sm font-medium transition-colors"
           >
             {status.kind === 'pending' ? 'Generating…' : 'Apply'}
           </button>

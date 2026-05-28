@@ -8,7 +8,7 @@ export function SourcePanel() {
   const error = useModelStore((s) => s.result.error);
 
   return (
-    <div className="flex flex-col h-full border-r border-border bg-panel">
+    <div className="flex flex-col h-full bg-panel">
       <div className="px-3 py-2 text-xs uppercase tracking-wide text-gray-400 border-b border-border">
         ParametricModel.ts
       </div>

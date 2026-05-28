@@ -81,10 +81,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
     const result = await generateModel({ prompt: trimmed, currentSource: get().source });
 
     if (result.status === 'success') {
+      const run = runModel(result.source);
+      // Always update source so the user can hand-fix bad output; surface any
+      // runtime error in the prompt status instead of falsely claiming success.
       set({
         source: result.source,
-        result: runModel(result.source),
-        promptStatus: { kind: 'success', message: result.message },
+        result: run,
+        promptStatus: run.error
+          ? { kind: 'error', message: `Generated source has a runtime error: ${run.error}` }
+          : { kind: 'success', message: result.message },
       });
     } else {
       set({ promptStatus: { kind: result.status, message: result.message } });

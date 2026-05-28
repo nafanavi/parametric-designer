@@ -36,19 +36,21 @@ export function EditorLayout() {
 
       <ActionToolbar />
 
-      <div className="flex flex-col flex-1 min-h-0">
-        <main
-          className="grid flex-1 min-h-0"
-          style={{ gridTemplateColumns: '320px 1fr 280px' }}
-        >
-          <SourcePanel />
-          <div className="relative min-h-0 min-w-0 overflow-hidden">
-            <Scene />
+      <main
+        className="grid flex-1 min-h-0"
+        style={{ gridTemplateColumns: '320px 1fr 280px' }}
+      >
+        <div className="flex flex-col min-h-0 border-r border-border">
+          <div className="flex-1 min-h-0">
+            <SourcePanel />
           </div>
-          <PropertyPanel />
-        </main>
-        {promptOpen && <PromptPanel />}
-      </div>
+          {promptOpen && <PromptPanel />}
+        </div>
+        <div className="relative min-h-0 min-w-0 overflow-hidden">
+          <Scene />
+        </div>
+        <PropertyPanel />
+      </main>
     </div>
   );
 }

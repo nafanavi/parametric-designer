@@ -51,7 +51,39 @@ triangulation.
 
 ```bash
 npm install
+cp .env.local.example .env.local   # optional — fill in a Groq key to enable the prompt panel
 npm run dev
 ```
 
 Open http://localhost:3000.
+
+## LLM prompt panel
+
+The bottom **Prompt** panel sends `{prompt, currentSource}` to `/api/generate`
+(see `src/app/api/generate/route.ts`). The route reads server-side env vars and
+calls the configured provider through a thin adapter
+(`src/model/llm/providers/openai-compatible.ts`).
+
+API keys never leave the server. Swapping providers is config, not code — the
+adapter speaks OpenAI's `/chat/completions` shape, which every provider in the
+table below accepts.
+
+| Provider | `LLM_BASE_URL` | `LLM_MODEL` (example) | Notes |
+| --- | --- | --- | --- |
+| Groq (default) | `https://api.groq.com/openai/v1` | `llama-3.3-70b-versatile` | Generous free tier, fast |
+| Together.ai | `https://api.together.xyz/v1` | `meta-llama/Llama-3.3-70B-Instruct-Turbo` | Free trial credits |
+| OpenRouter | `https://openrouter.ai/api/v1` | provider-prefixed slug | Gateway; some free models |
+| Ollama (local) | `http://localhost:11434/v1` | `llama3.1` | No key, runs locally |
+| OpenAI | `https://api.openai.com/v1` | `gpt-4o-mini` | Paid |
+
+`.env.local`:
+
+```bash
+LLM_PROVIDER=openai-compat
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_API_KEY=gsk_...
+LLM_MODEL=llama-3.3-70b-versatile
+```
+
+If the env vars are absent, the panel still opens but Apply reports
+`unavailable` with the missing-var name — no crash.

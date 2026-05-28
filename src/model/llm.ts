@@ -1,11 +1,7 @@
 /**
- * LLM integration seam. Today this is a stub that returns `unavailable`; swap
- * the implementation to a real call (Anthropic SDK, OpenAI, server route)
- * without touching the UI or the store.
- *
- * The contract: `generateModel` takes the user prompt + current source and
- * returns either a new source string to apply, or a message explaining why no
- * change was produced.
+ * Browser-side LLM facade. Posts to /api/generate so the API key never leaves
+ * the server. The route handler decides which provider/model is in use —
+ * swapping providers does not touch this file or the UI.
  */
 
 export interface ModelGenerationRequest {
@@ -21,15 +17,23 @@ export type ModelGenerationResult =
 export async function generateModel(
   req: ModelGenerationRequest,
 ): Promise<ModelGenerationResult> {
-  // TODO: wire to a real LLM. The Claude API would be invoked from a Next.js
-  // route (so the key stays server-side), then the resulting source returned
-  // here. For now we surface the prompt back to the user as confirmation.
-  return {
-    status: 'unavailable',
-    message: `LLM not wired yet. Received prompt: "${truncate(req.prompt, 200)}"`,
-  };
-}
+  let res: Response;
+  try {
+    res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+  } catch (err) {
+    return {
+      status: 'error',
+      message: err instanceof Error ? err.message : 'Network error',
+    };
+  }
 
-function truncate(s: string, n: number) {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
+  const json = (await res.json().catch(() => null)) as ModelGenerationResult | null;
+  if (!json || typeof json !== 'object' || !('status' in json)) {
+    return { status: 'error', message: `Bad response from /api/generate (HTTP ${res.status}).` };
+  }
+  return json;
 }
