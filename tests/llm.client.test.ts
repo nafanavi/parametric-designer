@@ -30,7 +30,7 @@ describe('generateModel (client)', () => {
       }),
     );
 
-    const out = await generateModel({ prompt: 'add one', currentSource: '' });
+    const out = await generateModel({ prompt: 'add one', currentSource: '', selectionId: null });
     expect(out.status).toBe('success');
     if (out.status === 'success') {
       expect(out.source).toBe('api.cabinet({});');
@@ -45,7 +45,7 @@ describe('generateModel (client)', () => {
       }),
     );
 
-    const out = await generateModel({ prompt: 'x', currentSource: '' });
+    const out = await generateModel({ prompt: 'x', currentSource: '', selectionId: null });
     expect(out.status).toBe('unavailable');
     expect(out.message).toContain('LLM_API_KEY');
   });
@@ -58,7 +58,7 @@ describe('generateModel (client)', () => {
       }),
     );
 
-    const out = await generateModel({ prompt: 'x', currentSource: '' });
+    const out = await generateModel({ prompt: 'x', currentSource: '', selectionId: null });
     expect(out.status).toBe('error');
   });
 
@@ -67,7 +67,7 @@ describe('generateModel (client)', () => {
       throw new Error('socket hangup');
     });
 
-    const out = await generateModel({ prompt: 'x', currentSource: '' });
+    const out = await generateModel({ prompt: 'x', currentSource: '', selectionId: null });
     expect(out.status).toBe('error');
     expect(out.message).toContain('socket hangup');
   });
@@ -77,7 +77,7 @@ describe('generateModel (client)', () => {
       new Response('not json', { status: 200, headers: { 'Content-Type': 'text/plain' } }),
     );
 
-    const out = await generateModel({ prompt: 'x', currentSource: '' });
+    const out = await generateModel({ prompt: 'x', currentSource: '', selectionId: null });
     expect(out.status).toBe('error');
     expect(out.message).toContain('Bad response');
   });

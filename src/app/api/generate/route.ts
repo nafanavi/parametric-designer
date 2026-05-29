@@ -4,6 +4,10 @@ import { generateText, APICallError } from 'ai';
 import { selectProvider, ProviderConfigError } from '@/model/llm/providers';
 import { SYSTEM_PROMPT, buildUserPrompt } from '@/model/llm/prompt';
 import { extractCode } from '@/model/llm/extract';
+import { buildSceneTools } from '@/model/llm/tools';
+import { preflight } from '@/model/llm/preflight';
+import { SceneQuery } from '@/model/scene/query';
+import { runModel } from '@/model/runtime';
 import type { ModelGenerationResult } from '@/model/llm';
 
 export const runtime = 'nodejs';
@@ -12,9 +16,11 @@ export const dynamic = 'force-dynamic';
 const requestSchema = z.object({
   prompt: z.string().min(1).max(8000),
   currentSource: z.string().max(100_000),
+  selectionId: z.string().nullable().optional(),
 });
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_TOOL_STEPS = 6;
 
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null);
@@ -23,6 +29,15 @@ export async function POST(req: Request) {
     return NextResponse.json<ModelGenerationResult>(
       { status: 'error', message: 'Invalid request: ' + parsed.error.message },
       { status: 400 },
+    );
+  }
+
+  // Cheap deterministic checks before we burn an LLM call.
+  const blocker = preflight(parsed.data.prompt, parsed.data.selectionId ?? null);
+  if (blocker) {
+    return NextResponse.json<ModelGenerationResult>(
+      { status: 'unavailable', message: blocker.message },
+      { status: 200 },
     );
   }
 
@@ -39,6 +54,13 @@ export async function POST(req: Request) {
     throw err;
   }
 
+  // Reconstruct the scene server-side so the model can inspect it via tools.
+  // `runModel` evaluates the source in a fresh stub kernel — same code path
+  // the client uses, so the tools see exactly what the user sees.
+  const runResult = runModel(parsed.data.currentSource);
+  const query = new SceneQuery(runResult);
+  const tools = buildSceneTools(query, parsed.data.selectionId ?? null);
+
   const timeoutMs = Number(process.env.LLM_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
@@ -48,6 +70,8 @@ export async function POST(req: Request) {
       model: selection.model,
       system: SYSTEM_PROMPT,
       prompt: buildUserPrompt(parsed.data.currentSource, parsed.data.prompt),
+      tools,
+      maxSteps: MAX_TOOL_STEPS,
       temperature: 0.2,
       abortSignal: ac.signal,
     });

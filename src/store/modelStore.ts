@@ -78,7 +78,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
     if (!trimmed) return;
 
     set({ promptStatus: { kind: 'pending', message: 'Generating…' } });
-    const result = await generateModel({ prompt: trimmed, currentSource: get().source });
+    const result = await generateModel({
+      prompt: trimmed,
+      currentSource: get().source,
+      selectionId: get().selection,
+    });
 
     if (result.status === 'success') {
       const run = runModel(result.source);

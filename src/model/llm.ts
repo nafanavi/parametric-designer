@@ -7,6 +7,9 @@
 export interface ModelGenerationRequest {
   readonly prompt: string;
   readonly currentSource: string;
+  /** Id of the currently-selected SceneNode, surfaced to the server's
+   *  `getSelection` tool. `null` when nothing is selected. */
+  readonly selectionId: string | null;
 }
 
 export type ModelGenerationResult =
