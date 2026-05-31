@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import { EXAMPLE_MODEL_SOURCE } from '@/model/example';
 import { runModel, type ParamDef, type RunResult } from '@/model/runtime';
-import { rewriteParamDefault, hasRewritableParam } from '@/model/rewrite';
+import { rewriteParamDefault, hasRewritableParam } from '@/model/ast/rewrite';
 import { generateModel } from '@/model/llm';
 import type { SourceEdit } from '@/domain/cabinet/actions';
 
