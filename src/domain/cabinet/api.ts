@@ -1,76 +1,152 @@
 import type { CoreAPI } from '@/core/api';
 import type { SolidId, Vec3 } from '@/core/types';
 import type {
+  CabinetInput,
   CabinetParams,
+  DoorInput,
   DoorParams,
+  DrawerInput,
   DrawerParams,
-  PanelParams,
+  PanelInput,
   SceneNode,
+  ShelfInput,
   ShelfParams,
 } from './types';
 
 /**
- * Context handed to a model script. The runtime owns the call counter and the
- * collection sink — domain functions just push nodes into it.
+ * Context handed to a model script. The runtime owns the call counter and
+ * the collection sink — domain functions just push nodes into it.
+ *
+ * `collect(node, parent?)` is the single attach point:
+ *   - parent provided → attach to parent.children (construction-time mutation)
+ *   - parent absent → push as a top-level node
  */
 export interface DomainContext {
   readonly core: CoreAPI;
   nextCall(): number;
-  collect(node: SceneNode): SceneNode;
+  collect(node: SceneNode, parent?: SceneNode): SceneNode;
 }
 
-const addVec = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const ZERO: Vec3 = [0, 0, 0];
 
 export interface CabinetAPI {
-  cabinet(params: CabinetParams): SceneNode;
-  panel(params: PanelParams): SceneNode;
-  shelf(params: ShelfParams): SceneNode;
-  door(params: DoorParams): SceneNode;
-  drawer(params: DrawerParams): SceneNode;
+  cabinet(input: CabinetInput): SceneNode;
+  panel(input: PanelInput): SceneNode;
+  shelf(input: ShelfInput): SceneNode;
+  door(input: DoorInput): SceneNode;
+  drawer(input: DrawerInput): SceneNode;
 }
 
 export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
   const { core } = ctx;
 
-  const makePanel = (p: PanelParams, parentCall: number): SceneNode => {
-    const solid = core.box({
-      size: [p.width, p.height, p.thickness],
-      transform: { translation: p.position },
-    });
-    return {
+  function expectCabinetParent(parent: SceneNode, callerName: string): CabinetParams {
+    if (parent.type !== 'cabinet') {
+      throw new Error(`api.${callerName}({ in: ... }) expects a cabinet, got '${parent.type}'`);
+    }
+    return parent.params;
+  }
+
+  // Internal helper: emits one panel solid + the corresponding panel SceneNode.
+  function buildPanelChild(
+    parent: SceneNode,
+    size: Vec3,
+    centre: Vec3,
+    idx: number,
+    label: string,
+  ): void {
+    const solid = core.box({ size, transform: { translation: centre } });
+    const node: SceneNode = {
       type: 'panel',
-      id: `panel#${parentCall}-${p.position.join(',')}`,
-      callIndex: parentCall,
-      params: p,
+      id: `panel#${idx}-${label}`,
+      callIndex: idx,
+      params: {
+        width: size[0],
+        height: size[1],
+        thickness: size[2],
+        position: centre,
+      },
       solids: [solid],
       children: [],
     };
-  };
+    ctx.collect(node, parent);
+  }
 
   return {
-    panel(params) {
+    cabinet(input) {
+      const idx = ctx.nextCall();
+      const position: Vec3 = input.position ?? ZERO;
+      const params: CabinetParams = { ...input, position };
+      const { width: w, height: h, depth: d, thickness: t } = params;
+
+      const node: SceneNode = {
+        type: 'cabinet',
+        id: `cabinet#${idx}`,
+        callIndex: idx,
+        params,
+        solids: [],   // cabinet itself owns no solid; its frame is its children
+        children: [],
+      };
+      ctx.collect(node);
+
+      const [px, py, pz] = position;
+      // Frame: left, right, top, bottom, back panels.
+      buildPanelChild(node, [t, h, d],          [px - w / 2 + t / 2, py + h / 2, pz],                  idx, 'left');
+      buildPanelChild(node, [t, h, d],          [px + w / 2 - t / 2, py + h / 2, pz],                  idx, 'right');
+      buildPanelChild(node, [w, t, d],          [px, py + h - t / 2, pz],                              idx, 'top');
+      buildPanelChild(node, [w, t, d],          [px, py + t / 2, pz],                                  idx, 'bottom');
+      buildPanelChild(node, [w, h, t],          [px, py + h / 2, pz - d / 2 + t / 2],                  idx, 'back');
+
+      return node;
+    },
+
+    panel(input) {
       const idx = ctx.nextCall();
       const solid = core.box({
-        size: [params.width, params.height, params.thickness],
-        transform: { translation: params.position },
+        size: [input.width, input.height, input.thickness],
+        transform: { translation: input.position },
       });
       const node: SceneNode = {
         type: 'panel',
         id: `panel#${idx}`,
         callIndex: idx,
-        params,
+        params: input,
         solids: [solid],
         children: [],
       };
       return ctx.collect(node);
     },
 
-    shelf(params) {
+    shelf(input) {
       const idx = ctx.nextCall();
+      const cab = expectCabinetParent(input.in, 'shelf');
+      const inset = input.inset ?? 0;
+      const [px, py, pz] = cab.position;
+
+      // Interior dimensions (frame thickness on each side).
+      const interiorW = cab.width - 2 * cab.thickness;
+      const interiorD = cab.depth - cab.thickness;        // back panel only
+      const shelfDepth = interiorD - inset;
+      const shelfWidth = interiorW;
+
+      const centre: Vec3 = [
+        px,
+        py + input.y,                                     // y is height above floor
+        pz + cab.thickness / 2 - inset / 2,               // sit against back unless inset
+      ];
+
       const solid = core.box({
-        size: [params.width, params.thickness, params.depth],
-        transform: { translation: params.position },
+        size: [shelfWidth, cab.thickness, shelfDepth],
+        transform: { translation: centre },
       });
+
+      const params: ShelfParams = {
+        width: shelfWidth,
+        depth: shelfDepth,
+        thickness: cab.thickness,
+        position: centre,
+      };
+
       const node: SceneNode = {
         type: 'shelf',
         id: `shelf#${idx}`,
@@ -79,15 +155,48 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         solids: [solid],
         children: [],
       };
-      return ctx.collect(node);
+      return ctx.collect(node, input.in);
     },
 
-    door(params) {
+    door(input) {
       const idx = ctx.nextCall();
+      const cab = expectCabinetParent(input.in, 'door');
+      const hinge: 'left' | 'right' = input.hinge ?? (input.side === 'right' ? 'right' : 'left');
+      const [px, py, pz] = cab.position;
+
+      const doorH = cab.height - 2 * cab.thickness - 2;   // 1mm clearance top/bottom
+      const doorY = py + cab.height / 2;
+      const doorZ = pz + cab.depth / 2 + cab.thickness / 2;
+
+      let doorW: number;
+      let doorX: number;
+      if (input.side === 'full') {
+        doorW = cab.width - 2;
+        doorX = px;
+      } else if (input.side === 'left') {
+        doorW = cab.width / 2 - 2;
+        doorX = px - cab.width / 4;
+      } else {
+        doorW = cab.width / 2 - 2;
+        doorX = px + cab.width / 4;
+      }
+
+      const centre: Vec3 = [doorX, doorY, doorZ];
+
       const solid = core.box({
-        size: [params.width, params.height, params.thickness],
-        transform: { translation: params.position },
+        size: [doorW, doorH, cab.thickness],
+        transform: { translation: centre },
       });
+
+      const params: DoorParams = {
+        width: doorW,
+        height: doorH,
+        thickness: cab.thickness,
+        position: centre,
+        hinge,
+        side: input.side,
+      };
+
       const node: SceneNode = {
         type: 'door',
         id: `door#${idx}`,
@@ -96,15 +205,34 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         solids: [solid],
         children: [],
       };
-      return ctx.collect(node);
+      return ctx.collect(node, input.in);
     },
 
-    drawer(params) {
+    drawer(input) {
       const idx = ctx.nextCall();
+      const cab = expectCabinetParent(input.in, 'drawer');
+      const [px, py, pz] = cab.position;
+
+      const drawerW = cab.width - 2 * cab.thickness - 4;  // small clearance
+      const drawerD = cab.depth - cab.thickness;
+      const centre: Vec3 = [
+        px,
+        py + input.y + input.height / 2,
+        pz + cab.thickness / 2,
+      ];
+
       const solid = core.box({
-        size: [params.width, params.height, params.depth],
-        transform: { translation: params.position },
+        size: [drawerW, input.height, drawerD],
+        transform: { translation: centre },
       });
+
+      const params: DrawerParams = {
+        width: drawerW,
+        height: input.height,
+        depth: drawerD,
+        position: centre,
+      };
+
       const node: SceneNode = {
         type: 'drawer',
         id: `drawer#${idx}`,
@@ -113,112 +241,10 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         solids: [solid],
         children: [],
       };
-      return ctx.collect(node);
-    },
-
-    cabinet(params) {
-      const idx = ctx.nextCall();
-      const origin: Vec3 = params.position ?? [0, 0, 0];
-      const t = params.thickness;
-      const w = params.width;
-      const h = params.height;
-      const d = params.depth;
-
-      const solids: SolidId[] = [];
-      const children: SceneNode[] = [];
-
-      const push = (n: SceneNode) => {
-        children.push(n);
-        for (const s of n.solids) solids.push(s);
-      };
-
-      // Left panel
-      push(makePanel({
-        width: t, height: h, thickness: d,
-        position: addVec(origin, [-w / 2 + t / 2, h / 2, 0]),
-      } as unknown as PanelParams, idx));
-      // Right panel
-      push(makePanel({
-        width: t, height: h, thickness: d,
-        position: addVec(origin, [w / 2 - t / 2, h / 2, 0]),
-      } as unknown as PanelParams, idx));
-      // Top
-      push(makePanel({
-        width: w, height: t, thickness: d,
-        position: addVec(origin, [0, h - t / 2, 0]),
-      } as unknown as PanelParams, idx));
-      // Bottom
-      push(makePanel({
-        width: w, height: t, thickness: d,
-        position: addVec(origin, [0, t / 2, 0]),
-      } as unknown as PanelParams, idx));
-      // Back
-      push(makePanel({
-        width: w, height: h, thickness: t,
-        position: addVec(origin, [0, h / 2, -d / 2 + t / 2]),
-      } as unknown as PanelParams, idx));
-
-      // Shelves evenly spaced
-      const interior = h - 2 * t;
-      const slots = params.shelves + 1;
-      for (let i = 1; i < slots; i++) {
-        const y = t + (interior * i) / slots;
-        const shelfSolid = core.box({
-          size: [w - 2 * t, t, d - t],
-          transform: { translation: addVec(origin, [0, y, t / 2]) },
-        });
-        solids.push(shelfSolid);
-        children.push({
-          type: 'shelf',
-          id: `shelf#${idx}-${i}`,
-          callIndex: idx,
-          params: {
-            width: w - 2 * t,
-            depth: d - t,
-            thickness: t,
-            position: addVec(origin, [0, y, t / 2]),
-          },
-          solids: [shelfSolid],
-          children: [],
-        });
-      }
-
-      // Doors
-      if (params.doors > 0) {
-        const doorW = (w - t) / params.doors;
-        for (let i = 0; i < params.doors; i++) {
-          const cx = -w / 2 + t / 2 + doorW * (i + 0.5);
-          const doorSolid = core.box({
-            size: [doorW - 2, h - 2 * t, t],
-            transform: { translation: addVec(origin, [cx, h / 2, d / 2 + t / 2]) },
-          });
-          solids.push(doorSolid);
-          children.push({
-            type: 'door',
-            id: `door#${idx}-${i}`,
-            callIndex: idx,
-            params: {
-              width: doorW - 2,
-              height: h - 2 * t,
-              thickness: t,
-              position: addVec(origin, [cx, h / 2, d / 2 + t / 2]),
-              hinge: i === 0 ? 'left' : 'right',
-            },
-            solids: [doorSolid],
-            children: [],
-          });
-        }
-      }
-
-      const node: SceneNode = {
-        type: 'cabinet',
-        id: `cabinet#${idx}`,
-        callIndex: idx,
-        params,
-        solids,
-        children,
-      };
-      return ctx.collect(node);
+      return ctx.collect(node, input.in);
     },
   };
 }
+
+// Re-export SolidId so callers needing it stay one import away.
+export type { SolidId };

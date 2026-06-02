@@ -8,8 +8,16 @@ Low-code platform for parametric 3D/2D modeling apps. Goal: "Vercel for 3D apps"
 - **CoreAPI** wraps a BREP kernel (target: ClassCAD; currently a stub). It exposes primitives + boolean ops + queries — nothing domain-specific.
 - **DomainAPI** is per-vertical (cabinets, windows, kitchens). It returns typed `SceneNode`s for UI/editor traceability.
 - **Action functions** return expression trees / `SourceEdit`s — they correspond to UI buttons that mutate the model source.
-- **Visual editor**: selecting a 3D object → find its originating call → expose its params for editing. The link between source code and 3D scene is the whole point.
-- Functional nature of the model enables client+server BREP/triangulation, distributed caching, and Git-based undo/collab. Keep the runtime pure where possible.
+- **Visual editor (Puck-style).** Selecting a 3D object retrieves the call stack of DomainAPI calls that produced it, enumerates every parameter at every level, and exposes them for friendly editing. Great UI comes from this link between source code and 3D model, backed by the rich-type system of the authoring language.
+- **Direct manipulation in the viewport.** Drag to move, handles to resize, click to edit — every interaction writes back to the source, never to hidden state.
+- **3D containers (flexbox-style).** Cabinets first, then other verticals. Containers lay out children by rules (gap, distribution, alignment). Children expose `min`/`max`/`preferred` size hints; resizing the container reflows them, and resizing a child respects the container and may push neighbours.
+- **Auto-generated React UI.** Property panels, action buttons, and inspectors all derive from the typed DomainAPI signatures and from `param('name', default)` calls in the source. Developers polish per-vertical overrides on top.
+- **Source is the only canonical state.** Every edit — slider, drag, action button, LLM prompt — round-trips through the source string. This is what enables Git-based history, undo/redo, branching, and online collaboration almost for free.
+- **Functional, pure evaluation.** Same source → same scene; no clocks, randomness, or hidden IO. Underpins deterministic undo, server-side reconstruction, and distributed caching.
+- **Authoring uses millimetres.** Conversions happen once at the viewer boundary, never sprinkled through domain code.
+- **Performance is a first-class constraint.** Large models — hundreds of cabinets, thousands of solids — must stay responsive end-to-end. Avoid patterns that would block memoization, incremental rebuilds, instanced rendering, or server-side kernel offload.
+
+Temporary simplifications are fine and expected; architectural decisions that would force a big rewrite to enable any of the above are not. When in doubt, flag the trade-off.
 
 ## Tech stack
 
@@ -37,13 +45,10 @@ Before changing a layer, read the relevant contract:
 - [docs/core-api.md](docs/core-api.md) — CoreAPI contract + invariants any BREP implementation must hold. Read this before wiring ClassCAD.
 - [docs/domain-api.md](docs/domain-api.md) — guidelines for adding new verticals (windows, kitchens, …) or new entities within a vertical.
 
-## Conventions
+## Working notes
 
-- Model authoring uses **millimetres**. The viewer applies `scale={0.001}` once at the root group. Don't sprinkle conversions through domain code.
-- `SceneNode.callIndex` is a per-run counter assigned by the runtime — it's the bridge between a clicked mesh and its originating DomainAPI call. Keep it stable and monotonically increasing as the source is read top-to-bottom.
-- DomainAPI functions must register their node via `ctx.collect(node)` so the runtime can build the tree. Don't return nodes without collecting.
-- `param(name, defaultValue)` auto-registers into the parameter registry on first call. The property panel reads from this registry — never hard-code param UI.
-- New domain entities go in [src/domain/<area>/](src/domain/) with `types.ts`, `api.ts`, `actions.ts`. The CoreAPI must not gain domain knowledge.
+- New verticals go in [src/domain/<area>/](src/domain/). The CoreAPI must not gain domain knowledge.
+- Implementation conventions (how nodes register, how params are declared, how the runtime tracks call origins) live in the code and may evolve. Refer to current files when in doubt; flag any change that conflicts with Core idea.
 
 ## Known shortcuts (scratch-stage, not load-bearing)
 

@@ -11,14 +11,19 @@ export interface SceneNodeBase<T extends CabinetNodeType, P> {
   readonly children: readonly SceneNode[];
 }
 
+/**
+ * Stored cabinet params — the resolved (post-default) values that the
+ * SceneNode actually carries. `position` is required (defaults to [0,0,0]
+ * are resolved at construction time). Cabinet is now a frame only: shelves,
+ * doors, and drawers are added by separate `api.shelf` / `api.door` /
+ * `api.drawer` calls referencing the cabinet via `in:`.
+ */
 export interface CabinetParams {
   readonly width: number;
   readonly height: number;
   readonly depth: number;
   readonly thickness: number;
-  readonly shelves: number;
-  readonly doors: 0 | 1 | 2;
-  readonly position?: Vec3;
+  readonly position: Vec3;
 }
 
 export interface PanelParams {
@@ -41,6 +46,7 @@ export interface DoorParams {
   readonly thickness: number;
   readonly position: Vec3;
   readonly hinge: 'left' | 'right';
+  readonly side: 'left' | 'right' | 'full';
 }
 
 export interface DrawerParams {
@@ -56,3 +62,49 @@ export type SceneNode =
   | SceneNodeBase<'shelf', ShelfParams>
   | SceneNodeBase<'door', DoorParams>
   | SceneNodeBase<'drawer', DrawerParams>;
+
+// ─── Input types (what users write in api.X({...})) ───
+// These are the *authoring* shape; the stored params above are computed
+// from these at construction time.
+
+export interface CabinetInput {
+  readonly width: number;
+  readonly height: number;
+  readonly depth: number;
+  readonly thickness: number;
+  readonly position?: Vec3;
+}
+
+export interface ShelfInput {
+  /** Parent cabinet to mount this shelf inside. */
+  readonly in: SceneNode;
+  /** Height above the cabinet's floor, in millimetres. */
+  readonly y: number;
+  /** Optional gap from the front edge. Defaults to 0. */
+  readonly inset?: number;
+}
+
+export interface DoorInput {
+  /** Parent cabinet to mount this door on. */
+  readonly in: SceneNode;
+  /** Which half (or all) of the cabinet front this door covers. */
+  readonly side: 'left' | 'right' | 'full';
+  /** Optional hinge override; defaults to `side === 'right' ? 'right' : 'left'`. */
+  readonly hinge?: 'left' | 'right';
+}
+
+export interface DrawerInput {
+  /** Parent cabinet to mount this drawer inside. */
+  readonly in: SceneNode;
+  /** Height of the drawer's bottom above the cabinet floor. */
+  readonly y: number;
+  /** Vertical span of the drawer. */
+  readonly height: number;
+}
+
+export interface PanelInput {
+  readonly width: number;
+  readonly height: number;
+  readonly thickness: number;
+  readonly position: Vec3;
+}

@@ -39,8 +39,16 @@ export class ModelEvaluationSession {
     const ctx: DomainContext = {
       core: this._core,
       nextCall: () => ++this._callCounter,
-      collect: (node) => {
-        this._nodes.push(node);
+      // Single attach point. With `parent`, the node becomes its child
+      // (construction-time mutation; SceneNode.children stays `readonly`
+      // from every consumer's perspective). Without `parent`, the node is
+      // a top-level entry in `_nodes`.
+      collect: (node, parent) => {
+        if (parent) {
+          (parent.children as SceneNode[]).push(node);
+        } else {
+          this._nodes.push(node);
+        }
         return node;
       },
     };
