@@ -3,18 +3,20 @@
  *
  * The source is a regular JS function body — any modern syntax is fair game:
  * `function`/`const`/`let`, loops, arrow functions, destructuring, array
- * methods. `api` (the DomainAPI) and `param(name, defaultValue)` are the only
- * implicit globals.
+ * methods. `api` (the DomainAPI) is the implicit global.
  *
- * Every `param('name', <number-literal>)` declaration in the source shows up
- * in the Parameters panel; editing it there rewrites the literal in place.
- *
- * The new compositional API: `api.cabinet({...})` makes the frame only; add
+ * The compositional cabinet API: `api.cabinet({...})` builds the frame; add
  * shelves/doors/drawers with `api.shelf/door/drawer({ in: cab, ... })`.
- * Helpers like `evenShelves` below are just user-land JS — compose as you like.
+ * Helpers like `evenShelves` below are just user-land JS — compose freely.
+ *
+ * Per-instance editing: clicking a part in the viewport opens its parameters
+ * in the panel. Each cabinet below is its own top-level call, so editing one
+ * only affects that one. Shelves inside `evenShelves` share a single source
+ * call — editing any shelf there re-spaces every shelf the helper emitted.
+ * Inline the api.shelf calls if you want per-shelf control.
  */
 export const EXAMPLE_MODEL_SOURCE = `// Parametric cabinet model.
-// 'api' (DomainAPI) and 'param(name, default)' are in scope.
+// 'api' (DomainAPI) is in scope. Click any part in the viewport to edit.
 
 const evenShelves = (cab, count) => {
   const innerH = cab.params.height - 2 * cab.params.thickness;
@@ -23,20 +25,24 @@ const evenShelves = (cab, count) => {
   }
 };
 
-const createRow = (n, step) => {
-  for (let i = 0; i < n; i++) {
-    const cab = api.cabinet({
-      width: param('width', 800),
-      height: param('height', 1800),
-      depth: param('depth', 400),
-      thickness: 18,
-      position: [i * step, 0, 0],
-    });
-    evenShelves(cab, param('shelves', 3));
-    api.door({ in: cab, side: 'left' });
-    api.door({ in: cab, side: 'right' });
-  }
-};
+const a = api.cabinet({
+  width: 800, height: 1800, depth: 400, thickness: 18, position: [0, 0, 0],
+});
+evenShelves(a, 3);
+api.door({ in: a, side: 'left' });
+api.door({ in: a, side: 'right' });
 
-createRow(param('count', 3), 1000);
+const b = api.cabinet({
+  width: 800, height: 1800, depth: 400, thickness: 18, position: [1000, 0, 0],
+});
+evenShelves(b, 3);
+api.door({ in: b, side: 'left' });
+api.door({ in: b, side: 'right' });
+
+const c = api.cabinet({
+  width: 800, height: 1800, depth: 400, thickness: 18, position: [2000, 0, 0],
+});
+evenShelves(c, 3);
+api.door({ in: c, side: 'left' });
+api.door({ in: c, side: 'right' });
 `;

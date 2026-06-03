@@ -1,11 +1,14 @@
 import type { RunResult } from '@/model/runtime';
 import type { SceneNode } from '@/domain/cabinet/types';
 import type { AABB, SolidId, Vec3 } from '@/core/types';
+import type { SourceRange } from '@/model/ast/types';
 
 export interface NodeSummary {
   readonly id: string;
   readonly type: SceneNode['type'];
   readonly callIndex: number;
+  /** Byte offsets `[start, end)` of the originating `api.X(...)` call in source. */
+  readonly sourceRange: SourceRange | null;
   readonly parentId: string | null;
   readonly params: Record<string, unknown>;
   readonly aabb: AABB;
@@ -69,6 +72,7 @@ export class SceneQuery {
       id: node.id,
       type: node.type,
       callIndex: node.callIndex,
+      sourceRange: node.sourceRange ?? null,
       parentId: this.parentOf.get(id) ?? null,
       params: node.params as unknown as Record<string, unknown>,
       aabb,

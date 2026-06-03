@@ -1,6 +1,8 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useModelStore } from '@/store/modelStore';
+import { findCallProperties, type CallProperty } from '@/model/ast/rewrite';
 import type { SceneNode } from '@/domain/cabinet/types';
 
 function findNode(nodes: readonly SceneNode[], id: string | null): SceneNode | null {
@@ -14,58 +16,78 @@ function findNode(nodes: readonly SceneNode[], id: string | null): SceneNode | n
 }
 
 export function PropertyPanel() {
+  const source = useModelStore((s) => s.source);
   const result = useModelStore((s) => s.result);
-  const setParam = useModelStore((s) => s.setParam);
   const selection = useModelStore((s) => s.selection);
+  const setSelectionParam = useModelStore((s) => s.setSelectionParam);
 
   const selected = findNode(result.nodes, selection);
-  const params = Array.from(result.params.values());
+
+  // Editable, source-located properties of the selected call (if any).
+  const editable: CallProperty[] = useMemo(() => {
+    if (!selected?.sourceRange) return [];
+    return findCallProperties(source, selected.sourceRange);
+  }, [source, selected]);
 
   return (
     <div className="flex flex-col h-full border-l border-border bg-panel text-gray-100">
       <div className="px-3 py-2 text-xs uppercase tracking-wide text-gray-400 border-b border-border">
-        Parameters
-      </div>
-
-      <div className="p-3 space-y-3 overflow-y-auto">
-        {params.length === 0 && (
-          <div className="text-xs text-gray-500">
-            No <code>param(...)</code> declarations in the model.
-          </div>
-        )}
-        {params.map((p) => (
-          <div key={p.name} className="space-y-1">
-            <label className="text-xs text-gray-300">{p.name}</label>
-            <input
-              type="number"
-              value={p.value}
-              step={p.name === 'shelves' ? 1 : 10}
-              onChange={(e) => setParam(p.name, Number(e.target.value))}
-              className="w-full px-2 py-1 bg-panel-2 border border-border rounded text-sm"
-            />
-          </div>
-        ))}
-      </div>
-
-      <div className="border-t border-border px-3 py-2 text-xs uppercase tracking-wide text-gray-400">
         Selection
       </div>
-      <div className="p-3 text-xs space-y-2">
-        {!selected && <div className="text-gray-500">Pick a part in the viewport.</div>}
+
+      <div className="flex-1 p-3 text-xs space-y-3 overflow-y-auto">
+        {!selected && (
+          <div className="text-gray-500">Pick a part in the viewport to edit its parameters.</div>
+        )}
+
         {selected && (
           <>
-            <div className="text-gray-200">
-              <span className="text-gray-500">type:</span> {selected.type}
+            <div className="space-y-0.5 pb-2 border-b border-border">
+              <div className="text-gray-200">
+                <span className="text-gray-500">type:</span> {selected.type}
+              </div>
+              <div className="text-gray-200">
+                <span className="text-gray-500">id:</span> {selected.id}
+              </div>
+              <div className="text-gray-200">
+                <span className="text-gray-500">call:</span> #{selected.callIndex}
+              </div>
             </div>
-            <div className="text-gray-200">
-              <span className="text-gray-500">id:</span> {selected.id}
+
+            {editable.length === 0 && (
+              <div className="text-gray-500">
+                No editable properties found at this call site (or selection has no sourceRange).
+              </div>
+            )}
+
+            <div className="space-y-2">
+              {editable.map((p) => {
+                const editableNumber = p.currentNumber !== null;
+                return (
+                  <div key={`${p.name}-${p.valueRange.start}`} className="space-y-1">
+                    <label className="text-gray-300 flex items-center justify-between">
+                      <span>{p.name}</span>
+                      {!editableNumber && (
+                        <span className="text-[10px] text-gray-600">read-only</span>
+                      )}
+                    </label>
+                    {editableNumber ? (
+                      <input
+                        type="number"
+                        value={p.currentNumber ?? 0}
+                        step={10}
+                        onChange={(e) => setSelectionParam(p.name, Number(e.target.value))}
+                        className="w-full px-2 py-1 bg-panel-2 border border-border rounded text-sm"
+                      />
+                    ) : (
+                      <code className="block w-full px-2 py-1 bg-panel-2 border border-border rounded text-[11px] text-gray-400 overflow-x-auto">
+                        {source.slice(p.valueRange.start, p.valueRange.end)}
+                      </code>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            <div className="text-gray-200">
-              <span className="text-gray-500">call:</span> #{selected.callIndex}
-            </div>
-            <pre className="bg-panel-2 border border-border rounded p-2 text-[11px] overflow-x-auto">
-              {JSON.stringify(selected.params, null, 2)}
-            </pre>
           </>
         )}
       </div>

@@ -1,5 +1,6 @@
 import type { CoreAPI } from '@/core/api';
 import type { SolidId, Vec3 } from '@/core/types';
+import type { SourceRange } from '@/model/ast/types';
 import type {
   CabinetInput,
   CabinetParams,
@@ -25,6 +26,12 @@ export interface DomainContext {
   readonly core: CoreAPI;
   nextCall(): number;
   collect(node: SceneNode, parent?: SceneNode): SceneNode;
+  /**
+   * Source range of the `api.X(...)` call currently being evaluated, if the
+   * source was instrumented. `null` when running uninstrumented source
+   * (e.g. internal tests that call the API directly).
+   */
+  currentSourceRange(): SourceRange | null;
 }
 
 const ZERO: Vec3 = [0, 0, 0];
@@ -48,18 +55,22 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
   }
 
   // Internal helper: emits one panel solid + the corresponding panel SceneNode.
+  // Frame panels share their parent cabinet's sourceRange — they came from
+  // that one call.
   function buildPanelChild(
     parent: SceneNode,
     size: Vec3,
     centre: Vec3,
     idx: number,
     label: string,
+    sourceRange: SourceRange | undefined,
   ): void {
     const solid = core.box({ size, transform: { translation: centre } });
     const node: SceneNode = {
       type: 'panel',
       id: `panel#${idx}-${label}`,
       callIndex: idx,
+      ...(sourceRange ? { sourceRange } : {}),
       params: {
         width: size[0],
         height: size[1],
@@ -72,9 +83,12 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
     ctx.collect(node, parent);
   }
 
+  const currentRange = (): SourceRange | undefined => ctx.currentSourceRange() ?? undefined;
+
   return {
     cabinet(input) {
       const idx = ctx.nextCall();
+      const sourceRange = currentRange();
       const position: Vec3 = input.position ?? ZERO;
       const params: CabinetParams = { ...input, position };
       const { width: w, height: h, depth: d, thickness: t } = params;
@@ -83,6 +97,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         type: 'cabinet',
         id: `cabinet#${idx}`,
         callIndex: idx,
+        ...(sourceRange ? { sourceRange } : {}),
         params,
         solids: [],   // cabinet itself owns no solid; its frame is its children
         children: [],
@@ -91,17 +106,18 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
 
       const [px, py, pz] = position;
       // Frame: left, right, top, bottom, back panels.
-      buildPanelChild(node, [t, h, d],          [px - w / 2 + t / 2, py + h / 2, pz],                  idx, 'left');
-      buildPanelChild(node, [t, h, d],          [px + w / 2 - t / 2, py + h / 2, pz],                  idx, 'right');
-      buildPanelChild(node, [w, t, d],          [px, py + h - t / 2, pz],                              idx, 'top');
-      buildPanelChild(node, [w, t, d],          [px, py + t / 2, pz],                                  idx, 'bottom');
-      buildPanelChild(node, [w, h, t],          [px, py + h / 2, pz - d / 2 + t / 2],                  idx, 'back');
+      buildPanelChild(node, [t, h, d],          [px - w / 2 + t / 2, py + h / 2, pz],                  idx, 'left',   sourceRange);
+      buildPanelChild(node, [t, h, d],          [px + w / 2 - t / 2, py + h / 2, pz],                  idx, 'right',  sourceRange);
+      buildPanelChild(node, [w, t, d],          [px, py + h - t / 2, pz],                              idx, 'top',    sourceRange);
+      buildPanelChild(node, [w, t, d],          [px, py + t / 2, pz],                                  idx, 'bottom', sourceRange);
+      buildPanelChild(node, [w, h, t],          [px, py + h / 2, pz - d / 2 + t / 2],                  idx, 'back',   sourceRange);
 
       return node;
     },
 
     panel(input) {
       const idx = ctx.nextCall();
+      const sourceRange = currentRange();
       const solid = core.box({
         size: [input.width, input.height, input.thickness],
         transform: { translation: input.position },
@@ -110,6 +126,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         type: 'panel',
         id: `panel#${idx}`,
         callIndex: idx,
+        ...(sourceRange ? { sourceRange } : {}),
         params: input,
         solids: [solid],
         children: [],
@@ -119,6 +136,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
 
     shelf(input) {
       const idx = ctx.nextCall();
+      const sourceRange = currentRange();
       const cab = expectCabinetParent(input.in, 'shelf');
       const inset = input.inset ?? 0;
       const [px, py, pz] = cab.position;
@@ -151,6 +169,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         type: 'shelf',
         id: `shelf#${idx}`,
         callIndex: idx,
+        ...(sourceRange ? { sourceRange } : {}),
         params,
         solids: [solid],
         children: [],
@@ -160,6 +179,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
 
     door(input) {
       const idx = ctx.nextCall();
+      const sourceRange = currentRange();
       const cab = expectCabinetParent(input.in, 'door');
       const hinge: 'left' | 'right' = input.hinge ?? (input.side === 'right' ? 'right' : 'left');
       const [px, py, pz] = cab.position;
@@ -201,6 +221,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         type: 'door',
         id: `door#${idx}`,
         callIndex: idx,
+        ...(sourceRange ? { sourceRange } : {}),
         params,
         solids: [solid],
         children: [],
@@ -210,6 +231,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
 
     drawer(input) {
       const idx = ctx.nextCall();
+      const sourceRange = currentRange();
       const cab = expectCabinetParent(input.in, 'drawer');
       const [px, py, pz] = cab.position;
 
@@ -237,6 +259,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         type: 'drawer',
         id: `drawer#${idx}`,
         callIndex: idx,
+        ...(sourceRange ? { sourceRange } : {}),
         params,
         solids: [solid],
         children: [],

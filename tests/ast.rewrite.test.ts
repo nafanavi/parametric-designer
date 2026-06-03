@@ -1,123 +1,155 @@
 import { describe, it, expect } from 'vitest';
-import { rewriteParamDefault, hasRewritableParam } from '@/model/ast/rewrite';
+import {
+  findCallProperties,
+  rewriteCallProperty,
+} from '@/model/ast/rewrite';
+import { parseSource } from '@/model/ast/parse';
 
-describe('rewriteParamDefault (AST-located byte edits)', () => {
-  it('replaces a single-quoted param default with the new value', () => {
-    const src = `api.cabinet({ width: param('width', 800) });`;
-    expect(rewriteParamDefault(src, 'width', 1200)).toBe(
-      `api.cabinet({ width: param('width', 1200) });`,
-    );
+/**
+ * Helper: parses `source`, walks to the first `api.X(...)` call, and returns
+ * its source range. Used to feed the per-instance helpers without having to
+ * eyeball offsets in test code.
+ */
+function firstApiCallRange(source: string): { start: number; end: number } {
+  const ast = parseSource(source);
+  if (!ast) throw new Error('parse failed');
+  let found: { start: number; end: number } | null = null;
+  // walk manually — keep it dependency-free in the test fixture.
+  const visit = (n: { type?: string; start?: number; end?: number; [k: string]: unknown }): void => {
+    if (found) return;
+    if (
+      n.type === 'CallExpression' &&
+      (n.callee as { type?: string; object?: { type?: string; name?: string } } | undefined)?.type ===
+        'MemberExpression' &&
+      (n.callee as { object?: { type?: string; name?: string } }).object?.type === 'Identifier' &&
+      (n.callee as { object?: { type?: string; name?: string } }).object?.name === 'api'
+    ) {
+      found = { start: n.start ?? 0, end: n.end ?? 0 };
+      return;
+    }
+    for (const key of Object.keys(n)) {
+      const val = n[key];
+      if (val && typeof val === 'object') {
+        if (Array.isArray(val)) {
+          for (const item of val) {
+            if (item && typeof item === 'object') visit(item as Parameters<typeof visit>[0]);
+          }
+        } else {
+          visit(val as Parameters<typeof visit>[0]);
+        }
+      }
+    }
+  };
+  visit(ast as unknown as Parameters<typeof visit>[0]);
+  if (!found) throw new Error('no api.X call found');
+  return found;
+}
+
+describe('findCallProperties', () => {
+  it('lists every property of a call with its source range and current value', () => {
+    const src = `api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18 });`;
+    const range = firstApiCallRange(src);
+    const props = findCallProperties(src, range);
+
+    expect(props.map((p) => p.name)).toEqual(['width', 'height', 'depth', 'thickness']);
+    expect(props.map((p) => p.currentNumber)).toEqual([800, 1800, 400, 18]);
+
+    // Each valueRange should slice back to exactly the literal text.
+    for (const p of props) {
+      const slice = src.slice(p.valueRange.start, p.valueRange.end);
+      expect(slice).toBe(String(p.currentNumber));
+    }
   });
 
-  it('replaces a double-quoted param default — preserves the original quotes', () => {
-    const src = `api.cabinet({ width: param("width", 800) });`;
-    // Byte-edit only touches the literal; surrounding text (incl. quote style) is preserved.
-    expect(rewriteParamDefault(src, 'width', 1200)).toBe(
-      `api.cabinet({ width: param("width", 1200) });`,
-    );
+  it('reads through param(name, default) and reports the literal default', () => {
+    const src = `api.cabinet({ width: param('width', 800), height: 1800 });`;
+    const range = firstApiCallRange(src);
+    const props = findCallProperties(src, range);
+
+    const width = props.find((p) => p.name === 'width')!;
+    expect(width.currentNumber).toBe(800);
+    // The full param(...) call is the value range, not just the literal.
+    expect(src.slice(width.valueRange.start, width.valueRange.end)).toBe(`param('width', 800)`);
   });
 
-  it('preserves surrounding whitespace exactly', () => {
-    const src = `param(  'depth' ,   400   )`;
-    // Old regex implementation collapsed whitespace; AST byte-edit leaves it alone.
-    expect(rewriteParamDefault(src, 'depth', 500)).toBe(`param(  'depth' ,   500   )`);
+  it('handles negative literals', () => {
+    const src = `api.cabinet({ offset: -10 });`;
+    const range = firstApiCallRange(src);
+    const off = findCallProperties(src, range).find((p) => p.name === 'offset')!;
+    expect(off.currentNumber).toBe(-10);
   });
 
-  it('handles negative current defaults', () => {
-    const src = `param('offset', -10)`;
-    expect(rewriteParamDefault(src, 'offset', 25)).toBe(`param('offset', 25)`);
+  it('reports currentNumber=null for non-numeric or computed values', () => {
+    const src = `api.cabinet({ side: 'left', width: 800 + 100, position: [0, 0, 0] });`;
+    const range = firstApiCallRange(src);
+    const props = findCallProperties(src, range);
+
+    const byName = Object.fromEntries(props.map((p) => [p.name, p]));
+    expect(byName.side.currentNumber).toBeNull();
+    expect(byName.width.currentNumber).toBeNull();
+    expect(byName.position.currentNumber).toBeNull();
   });
 
-  it('handles decimal current defaults', () => {
-    const src = `param('ratio', 0.5)`;
-    expect(rewriteParamDefault(src, 'ratio', 0.75)).toBe(`param('ratio', 0.75)`);
-  });
-
-  it('rewrites all occurrences of the same name', () => {
-    const src = `param('w', 100); param('w', 200);`;
-    expect(rewriteParamDefault(src, 'w', 999)).toBe(`param('w', 999); param('w', 999);`);
-  });
-
-  it('leaves unrelated params untouched', () => {
-    const src = `param('width', 800); param('height', 1800);`;
-    expect(rewriteParamDefault(src, 'width', 900)).toBe(
-      `param('width', 900); param('height', 1800);`,
-    );
-  });
-
-  it('does not match a param name that is only a prefix substring', () => {
-    const src = `param('widthCm', 80)`;
-    expect(rewriteParamDefault(src, 'width', 900)).toBe(`param('widthCm', 80)`);
-  });
-
-  it('returns the source unchanged when the param is not declared', () => {
+  it('returns [] for an unknown call range', () => {
     const src = `api.cabinet({ width: 800 });`;
-    expect(rewriteParamDefault(src, 'width', 1200)).toBe(src);
+    expect(findCallProperties(src, { start: 9999, end: 99999 })).toEqual([]);
   });
 
-  it('does not rewrite param calls whose default is an expression', () => {
-    const src = `param('width', 800 + 100)`;
-    // Computed default — ambiguous to edit literally, so we leave it alone.
-    expect(rewriteParamDefault(src, 'width', 1200)).toBe(src);
-  });
-
-  // ─── New cases the regex implementation got wrong ───
-
-  it('does not match a param call inside a single-line comment', () => {
-    const src = `// param('width', 800)\nparam('width', 100);`;
-    const out = rewriteParamDefault(src, 'width', 999);
-    // The comment must stay verbatim; only the real call gets rewritten.
-    expect(out).toBe(`// param('width', 800)\nparam('width', 999);`);
-  });
-
-  it('does not match a param call inside a block comment', () => {
-    const src = `/* param('width', 800) */\nparam('width', 100);`;
-    const out = rewriteParamDefault(src, 'width', 999);
-    expect(out).toBe(`/* param('width', 800) */\nparam('width', 999);`);
-  });
-
-  it('does not match a param call inside a string literal', () => {
-    const src = `const note = "use param('width', 999)";\nparam('width', 100);`;
-    const out = rewriteParamDefault(src, 'width', 999);
-    expect(out).toBe(`const note = "use param('width', 999)";\nparam('width', 999);`);
-  });
-
-  it('handles multi-line param calls', () => {
-    const src = `param(\n  'width',\n  800\n);`;
-    expect(rewriteParamDefault(src, 'width', 1200)).toBe(`param(\n  'width',\n  1200\n);`);
-  });
-
-  it('rewrites only the literal-default call when literal and computed share a name', () => {
-    const src = `param('w', 100); param('w', 800 + 100);`;
-    const out = rewriteParamDefault(src, 'w', 999);
-    expect(out).toBe(`param('w', 999); param('w', 800 + 100);`);
-  });
-
-  it('returns the source unchanged when parsing fails', () => {
-    // Half-typed source from the editor textarea.
-    const src = `api.cabinet({ width: param('width', 800),`; // unclosed
-    expect(rewriteParamDefault(src, 'width', 1200)).toBe(src);
+  it('returns [] on parse failure', () => {
+    expect(findCallProperties(`api.cabinet({`, { start: 0, end: 13 })).toEqual([]);
   });
 });
 
-describe('hasRewritableParam', () => {
-  it('returns true for a literal-default param call', () => {
-    expect(hasRewritableParam(`param('w', 10)`, 'w')).toBe(true);
+describe('rewriteCallProperty', () => {
+  it('replaces a numeric literal at the property', () => {
+    const src = `api.cabinet({ width: 800, height: 1800 });`;
+    const range = firstApiCallRange(src);
+    expect(rewriteCallProperty(src, range, 'width', 1200)).toBe(
+      `api.cabinet({ width: 1200, height: 1800 });`,
+    );
   });
 
-  it('returns false when the name is absent', () => {
-    expect(hasRewritableParam(`param('h', 10)`, 'w')).toBe(false);
+  it('decouples from param(): replaces the whole param(...) call with a literal', () => {
+    const src = `api.cabinet({ width: param('width', 800), height: 1800 });`;
+    const range = firstApiCallRange(src);
+    expect(rewriteCallProperty(src, range, 'width', 1200)).toBe(
+      `api.cabinet({ width: 1200, height: 1800 });`,
+    );
   });
 
-  it('returns false when the default is non-literal', () => {
-    expect(hasRewritableParam(`param('w', 10 + 1)`, 'w')).toBe(false);
+  it('preserves surrounding whitespace and other properties', () => {
+    const src = `api.cabinet({\n  width:   800,\n  height:  1800,\n});`;
+    const range = firstApiCallRange(src);
+    // Only the literal `800` slot changes; the indentation/spacing stays.
+    expect(rewriteCallProperty(src, range, 'width', 1200)).toBe(
+      `api.cabinet({\n  width:   1200,\n  height:  1800,\n});`,
+    );
   });
 
-  it('returns false for matches that only appear in comments', () => {
-    expect(hasRewritableParam(`// param('w', 10)`, 'w')).toBe(false);
+  it('only affects the call at the given range, not other identical calls', () => {
+    const src =
+      `api.cabinet({ width: 800 });\n` +
+      `api.cabinet({ width: 800 });\n` +
+      `api.cabinet({ width: 800 });`;
+    // Grab the SECOND call's range (skip past the first).
+    const secondStart = src.indexOf('api.cabinet', 1);
+    const secondRange = { start: secondStart, end: secondStart + 'api.cabinet({ width: 800 })'.length };
+    const out = rewriteCallProperty(src, secondRange, 'width', 1200);
+    expect(out).toBe(
+      `api.cabinet({ width: 800 });\n` +
+        `api.cabinet({ width: 1200 });\n` +
+        `api.cabinet({ width: 800 });`,
+    );
   });
 
-  it('returns false when parsing fails', () => {
-    expect(hasRewritableParam(`param('w', 10`, 'w')).toBe(false);
+  it('returns the source unchanged when the property is missing', () => {
+    const src = `api.cabinet({ width: 800 });`;
+    const range = firstApiCallRange(src);
+    expect(rewriteCallProperty(src, range, 'height', 1800)).toBe(src);
+  });
+
+  it('returns the source unchanged for unparseable input', () => {
+    const src = `api.cabinet({ width:`;
+    expect(rewriteCallProperty(src, { start: 0, end: src.length }, 'width', 1200)).toBe(src);
   });
 });

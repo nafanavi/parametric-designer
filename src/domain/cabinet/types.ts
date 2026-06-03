@@ -1,4 +1,5 @@
 import type { SolidId, Vec3 } from '@/core/types';
+import type { SourceRange } from '@/model/ast/types';
 
 export type CabinetNodeType = 'cabinet' | 'panel' | 'shelf' | 'door' | 'drawer';
 
@@ -6,6 +7,14 @@ export interface SceneNodeBase<T extends CabinetNodeType, P> {
   readonly type: T;
   readonly id: string;
   readonly callIndex: number;
+  /**
+   * Byte offsets into the model source of the originating `api.X(...)` call.
+   * Optional because synthetic/unwrapped flows may not have it; today every
+   * DomainAPI-produced node does. Frame panels emitted internally by
+   * `api.cabinet` inherit the cabinet call's range — they "came from" that
+   * call.
+   */
+  readonly sourceRange?: SourceRange;
   readonly params: P;
   readonly solids: readonly SolidId[];
   readonly children: readonly SceneNode[];

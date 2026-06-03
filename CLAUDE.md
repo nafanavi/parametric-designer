@@ -50,6 +50,14 @@ Before changing a layer, read the relevant contract:
 - New verticals go in [src/domain/<area>/](src/domain/). The CoreAPI must not gain domain knowledge.
 - Implementation conventions (how nodes register, how params are declared, how the runtime tracks call origins) live in the code and may evolve. Refer to current files when in doubt; flag any change that conflicts with Core idea.
 
+### Plan log
+
+Whenever you produce a non-trivial refactoring plan, code review, design proposal, or "here's what I'd do next" recommendation, **also save it as a Markdown file to [.notes/plans/](.notes/plans/)** — git-ignored, sortable.
+
+- Filename: `YYYY-MM-DD-HHMM-<kebab-slug>.md` (run `date +%Y-%m-%d-%H%M` for the timestamp).
+- Body: the proposal itself in Markdown, with a brief header (date, trigger, status). Cross-link to relevant source files with relative paths.
+- Don't save trivial confirmations or one-line suggestions. Save anything that the user might want to revisit later as a design record.
+
 ## Known shortcuts (scratch-stage, not load-bearing)
 
 - Source is evaluated via `new Function(...)`; it's plain JS, not real TS. Upgrade path: in-browser transpile (sucrase/swc).

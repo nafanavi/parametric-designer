@@ -1,36 +1,142 @@
-import { findParamLiteralRanges } from './locate';
+import { simple as walkSimple } from 'acorn-walk';
+import type { Node } from 'acorn';
+import { parseSource } from './parse';
+import type { SourceRange } from './types';
 
 /**
- * AST-located source rewrite that keeps the editor UI and the model source
- * in sync. Replaces the regex-based predecessor: a `param('name', <literal>)`
- * call is found via the parser, so the match never fires inside strings or
- * comments, and `param('name', 800 + 100)` (computed default) is properly
- * left untouched.
+ * Per-instance, AST-located source rewrites. The byte range of a property's
+ * value is the only piece of state we surface; what's IN that range (a
+ * literal, a `param(...)` read, an expression) is an internal concern.
  *
- * The edit itself is byte-level — we splice the literal's source range
- * directly. Whitespace, comments, and the rest of the source are preserved
- * exactly as the user wrote them.
+ * Used by the editor's selection panel:
+ *
+ *   1. `findCallProperties(source, callRange)` lists every property of the
+ *      call's first argument with its source range and current value.
+ *   2. `rewriteCallProperty(source, callRange, name, value)` replaces that
+ *      range with a numeric literal. If the value was `param(...)`, this
+ *      decouples the call from the shared param.
  */
 
-export function rewriteParamDefault(
-  source: string,
-  name: string,
-  value: number,
-): string {
-  const ranges = findParamLiteralRanges(source, name);
-  if (ranges.length === 0) return source;
+export interface CallProperty {
+  readonly name: string;
+  /** Byte range of the value expression (right-hand side of the property). */
+  readonly valueRange: SourceRange;
+  /** Current value if it parses as a number, else `null`. */
+  readonly currentNumber: number | null;
+}
 
-  // Apply right-to-left so earlier offsets stay valid as we splice.
-  const sorted = [...ranges].sort((a, b) => b.start - a.start);
-  let out = source;
-  const literal = String(value);
-  for (const { start, end } of sorted) {
-    out = out.slice(0, start) + literal + out.slice(end);
+interface CallExpressionNode extends Node {
+  type: 'CallExpression';
+  callee: Node & { type?: string; name?: string };
+  arguments: Node[];
+}
+
+interface PropertyNode extends Node {
+  type: 'Property';
+  key: Node & { type?: string; name?: string; value?: unknown };
+  value: Node;
+  computed?: boolean;
+}
+
+interface ObjectExpressionNode extends Node {
+  type: 'ObjectExpression';
+  properties: Node[];
+}
+
+interface LiteralNode extends Node {
+  type: 'Literal';
+  value: unknown;
+}
+
+interface UnaryExpressionNode extends Node {
+  type: 'UnaryExpression';
+  operator: string;
+  argument: Node;
+}
+
+function propertyKeyName(p: PropertyNode): string | null {
+  if (p.computed) return null;
+  if (p.key.type === 'Identifier' && typeof p.key.name === 'string') return p.key.name;
+  if (p.key.type === 'Literal' && typeof p.key.value === 'string') return p.key.value;
+  return null;
+}
+
+/** Best-effort numeric extraction. Returns null for anything that isn't a
+ *  number literal, a negative literal, or a `param('name', <literal>)` call. */
+function extractNumber(node: Node): number | null {
+  if (node.type === 'Literal' && typeof (node as LiteralNode).value === 'number') {
+    return (node as LiteralNode).value as number;
   }
+  if (node.type === 'UnaryExpression') {
+    const u = node as UnaryExpressionNode;
+    if (
+      u.operator === '-' &&
+      u.argument.type === 'Literal' &&
+      typeof (u.argument as LiteralNode).value === 'number'
+    ) {
+      return -((u.argument as LiteralNode).value as number);
+    }
+  }
+  if (node.type === 'CallExpression') {
+    const inner = node as CallExpressionNode;
+    if (
+      inner.callee.type === 'Identifier' &&
+      inner.callee.name === 'param' &&
+      inner.arguments.length >= 2
+    ) {
+      return extractNumber(inner.arguments[1]);
+    }
+  }
+  return null;
+}
+
+/**
+ * Returns every direct property of the object passed as the first argument
+ * to the call at `callRange`. Computed keys and spread elements are skipped.
+ */
+export function findCallProperties(source: string, callRange: SourceRange): CallProperty[] {
+  const ast = parseSource(source);
+  if (!ast) return [];
+
+  const out: CallProperty[] = [];
+
+  walkSimple(ast, {
+    CallExpression(node) {
+      const call = node as CallExpressionNode;
+      if (call.start !== callRange.start || call.end !== callRange.end) return;
+      if (call.arguments.length === 0) return;
+      const arg = call.arguments[0];
+      if (arg.type !== 'ObjectExpression') return;
+
+      for (const prop of (arg as ObjectExpressionNode).properties) {
+        if (prop.type !== 'Property') continue;
+        const p = prop as PropertyNode;
+        const name = propertyKeyName(p);
+        if (!name) continue;
+        out.push({
+          name,
+          valueRange: { start: p.value.start, end: p.value.end },
+          currentNumber: extractNumber(p.value),
+        });
+      }
+    },
+  });
+
   return out;
 }
 
-/** Does `source` contain at least one rewritable `param(name, <literal>)`? */
-export function hasRewritableParam(source: string, name: string): boolean {
-  return findParamLiteralRanges(source, name).length > 0;
+/**
+ * Per-instance rewrite. Replaces the property's value at `callRange` with a
+ * plain numeric literal. Returns the source unchanged if the property isn't
+ * found.
+ */
+export function rewriteCallProperty(
+  source: string,
+  callRange: SourceRange,
+  propertyName: string,
+  value: number,
+): string {
+  const target = findCallProperties(source, callRange).find((p) => p.name === propertyName);
+  if (!target) return source;
+  return source.slice(0, target.valueRange.start) + String(value) + source.slice(target.valueRange.end);
 }

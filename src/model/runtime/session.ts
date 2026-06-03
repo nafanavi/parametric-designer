@@ -2,6 +2,8 @@ import type { CoreAPI } from '@/core/api';
 import { createStubCore } from '@/core/stub';
 import { createCabinetAPI, type CabinetAPI, type DomainContext } from '@/domain/cabinet/api';
 import type { SceneNode } from '@/domain/cabinet/types';
+import { instrumentApiCalls } from '@/model/ast/instrument';
+import type { SourceRange } from '@/model/ast/types';
 
 export interface ParamDef {
   readonly name: string;
@@ -18,8 +20,7 @@ export interface RunResult {
 /**
  * Owns the state that an evaluation accumulates: the BREP kernel, the
  * registered `param()` registry, the collected scene nodes, the call
- * counter, and any caught error. Replaces the naked closures that used to
- * live inside `runModel`.
+ * counter, the current source range being evaluated, and any caught error.
  *
  * Lifecycle: one session per model evaluation. Construct, `run(source)`,
  * then read `snapshot()`. The session is single-use — re-running would
@@ -31,6 +32,13 @@ export class ModelEvaluationSession {
   private readonly _nodes: SceneNode[] = [];
   private _callCounter = 0;
   private _error?: string;
+  /**
+   * Source range of the `api.X(...)` call currently being evaluated.
+   * Set/cleared by the `__withLoc` wrapper injected by `instrumentApiCalls`.
+   * `null` when running uninstrumented source (e.g. tests that call the API
+   * directly without going through the runtime).
+   */
+  private _currentSourceRange: SourceRange | null = null;
 
   readonly api: CabinetAPI;
   readonly param: (name: string, defaultValue: number) => number;
@@ -39,10 +47,6 @@ export class ModelEvaluationSession {
     const ctx: DomainContext = {
       core: this._core,
       nextCall: () => ++this._callCounter,
-      // Single attach point. With `parent`, the node becomes its child
-      // (construction-time mutation; SceneNode.children stays `readonly`
-      // from every consumer's perspective). Without `parent`, the node is
-      // a top-level entry in `_nodes`.
       collect: (node, parent) => {
         if (parent) {
           (parent.children as SceneNode[]).push(node);
@@ -51,6 +55,7 @@ export class ModelEvaluationSession {
         }
         return node;
       },
+      currentSourceRange: () => this._currentSourceRange,
     };
     this.api = createCabinetAPI(ctx);
     this.param = (name, defaultValue) => {
@@ -62,15 +67,30 @@ export class ModelEvaluationSession {
   }
 
   /**
-   * Evaluates the user's source in this session. Errors are captured into
-   * `error` rather than thrown — callers downstream of the runtime always
-   * receive a usable `RunResult`.
+   * Evaluates the user's source in this session. The source is first
+   * instrumented so every `api.X(...)` call is wrapped with `__withLoc`,
+   * which sets `_currentSourceRange` before the call runs and restores it
+   * after. Errors are captured into `error` rather than thrown.
    */
   run(source: string): void {
+    const instrumented = instrumentApiCalls(source);
+
+    // Stack-safe save/restore so nested api calls (e.g. `api.cabinet({
+    // foo: api.helper() })`) report the right range for each.
+    const withLoc = <T>(start: number, end: number, fn: () => T): T => {
+      const prev = this._currentSourceRange;
+      this._currentSourceRange = { start, end };
+      try {
+        return fn();
+      } finally {
+        this._currentSourceRange = prev;
+      }
+    };
+
     try {
       // eslint-disable-next-line no-new-func
-      const fn = new Function('api', 'param', source);
-      fn(this.api, this.param);
+      const fn = new Function('api', 'param', '__withLoc', instrumented);
+      fn(this.api, this.param, withLoc);
     } catch (err) {
       this._error = err instanceof Error ? err.message : String(err);
     }

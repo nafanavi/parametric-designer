@@ -3,8 +3,9 @@
 import { create } from 'zustand';
 import { EXAMPLE_MODEL_SOURCE } from '@/model/example';
 import { runModel, type ParamDef, type RunResult } from '@/model/runtime';
-import { rewriteParamDefault, hasRewritableParam } from '@/model/ast/rewrite';
+import { rewriteCallProperty } from '@/model/ast/rewrite';
 import { generateModel } from '@/model/llm';
+import type { SceneNode } from '@/domain/cabinet/types';
 import type { SourceEdit } from '@/domain/cabinet/actions';
 
 export interface PromptStatus {
@@ -22,7 +23,13 @@ interface ModelState {
   promptHeight: number;
 
   setSource: (source: string) => void;
-  setParam: (name: string, value: number) => void;
+  /**
+   * Per-instance edit: rewrites a property of the currently-selected node's
+   * source call. If the selected value was a `param(...)` read, the call is
+   * decoupled from that param (it now carries a literal). No-op when nothing
+   * is selected or the selection has no sourceRange.
+   */
+  setSelectionParam: (name: string, value: number) => void;
   select: (nodeId: string | null) => void;
   applyEdit: (edit: SourceEdit) => void;
 
@@ -30,6 +37,15 @@ interface ModelState {
   setPromptOpen: (open: boolean) => void;
   setPromptHeight: (height: number) => void;
   submitPrompt: (text: string) => Promise<void>;
+}
+
+function findNodeById(nodes: readonly SceneNode[], id: string): SceneNode | null {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    const child = findNodeById(n.children, id);
+    if (child) return child;
+  }
+  return null;
 }
 
 const initialResult = runModel(EXAMPLE_MODEL_SOURCE);
@@ -47,12 +63,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
     set({ source, result: runModel(source) });
   },
 
-  setParam: (name, value) => {
-    const { source } = get();
-    if (!hasRewritableParam(source, name)) {
-      return;
-    }
-    const next = rewriteParamDefault(source, name, value);
+  setSelectionParam: (name, value) => {
+    const { source, selection, result } = get();
+    if (!selection) return;
+    const node = findNodeById(result.nodes, selection);
+    if (!node?.sourceRange) return;
+    const next = rewriteCallProperty(source, node.sourceRange, name, value);
+    if (next === source) return;
     set({ source: next, result: runModel(next) });
   },
 
