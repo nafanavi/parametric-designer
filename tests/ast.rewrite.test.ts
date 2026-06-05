@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   findCallProperties,
   rewriteCallProperty,
+  findEnclosingStatement,
+  removeCallStatement,
 } from '@/model/ast/rewrite';
 import { parseSource } from '@/model/ast/parse';
 
@@ -151,5 +153,108 @@ describe('rewriteCallProperty', () => {
   it('returns the source unchanged for unparseable input', () => {
     const src = `api.cabinet({ width:`;
     expect(rewriteCallProperty(src, { start: 0, end: src.length }, 'width', 1200)).toBe(src);
+  });
+});
+
+describe('findEnclosingStatement', () => {
+  it('finds an ExpressionStatement around a top-level call', () => {
+    const src = `api.shelf({ in: a, y: 600 });`;
+    const range = firstApiCallRange(src);
+    const stmt = findEnclosingStatement(src, range);
+    expect(stmt).toEqual({ start: 0, end: src.length });
+  });
+
+  it('finds a VariableDeclaration around `const cab = api.cabinet(...)`', () => {
+    const src = `const cab = api.cabinet({ width: 800 });`;
+    const range = firstApiCallRange(src);
+    const stmt = findEnclosingStatement(src, range);
+    expect(stmt).toEqual({ start: 0, end: src.length });
+  });
+
+  it('finds the innermost enclosing statement for nested calls', () => {
+    // The shelf's enclosing statement is the inner ExpressionStatement,
+    // not the outer VariableDeclaration that defines the helper.
+    const src =
+      `const helper = (cab) => {\n` +
+      `  api.shelf({ in: cab, y: 600 });\n` +
+      `};`;
+    // `firstApiCallRange` walks the full AST and returns the first api.X call.
+    const target = firstApiCallRange(src);
+    const stmt = findEnclosingStatement(src, target);
+    expect(stmt).not.toBeNull();
+    expect(src.slice(stmt!.start, stmt!.end).trim()).toBe(`api.shelf({ in: cab, y: 600 });`);
+    // And it's shorter than the full helper declaration.
+    expect(stmt!.end - stmt!.start).toBeLessThan(src.length);
+  });
+
+  it('returns null on parse failure', () => {
+    expect(findEnclosingStatement(`api.shelf({`, { start: 0, end: 11 })).toBeNull();
+  });
+});
+
+describe('removeCallStatement', () => {
+  it('removes a single-line ExpressionStatement and its trailing newline', () => {
+    const src =
+      `const a = api.cabinet({ width: 800 });\n` +
+      `api.shelf({ in: a, y: 600 });\n` +
+      `api.door({ in: a, side: 'left' });\n`;
+    const shelfStart = src.indexOf('api.shelf');
+    const shelfRange = { start: shelfStart, end: shelfStart + `api.shelf({ in: a, y: 600 })`.length };
+    expect(removeCallStatement(src, shelfRange)).toBe(
+      `const a = api.cabinet({ width: 800 });\n` +
+        `api.door({ in: a, side: 'left' });\n`,
+    );
+  });
+
+  it('removes a multi-line VariableDeclaration with object-literal argument', () => {
+    const src =
+      `const a = api.cabinet({\n` +
+      `  width: 800,\n` +
+      `  height: 1800,\n` +
+      `});\n` +
+      `api.door({ in: a, side: 'left' });\n`;
+    const cabStart = src.indexOf('api.cabinet');
+    // The CallExpression range is just the api.cabinet({...}) span.
+    // Find its end by counting matched braces.
+    let depth = 0;
+    let i = cabStart;
+    while (i < src.length) {
+      const ch = src[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0) { i++; break; }
+      }
+      i++;
+    }
+    const cabRange = { start: cabStart, end: i };
+    const out = removeCallStatement(src, cabRange);
+    // Everything from `const a = ` through `});` plus its trailing newline goes.
+    expect(out).toBe(`api.door({ in: a, side: 'left' });\n`);
+  });
+
+  it('preserves indentation outside the deleted statement', () => {
+    const src =
+      `function build() {\n` +
+      `  const a = api.cabinet({ width: 800 });\n` +
+      `  api.shelf({ in: a, y: 600 });\n` +
+      `}\n`;
+    const shelfStart = src.indexOf('api.shelf');
+    const shelfRange = { start: shelfStart, end: shelfStart + `api.shelf({ in: a, y: 600 })`.length };
+    expect(removeCallStatement(src, shelfRange)).toBe(
+      `function build() {\n` +
+        `  const a = api.cabinet({ width: 800 });\n` +
+        `}\n`,
+    );
+  });
+
+  it('returns the source unchanged when no enclosing statement is found', () => {
+    const src = `api.shelf({ in: a, y: 600 });`;
+    expect(removeCallStatement(src, { start: 999, end: 9999 })).toBe(src);
+  });
+
+  it('returns the source unchanged on parse failure', () => {
+    const src = `api.shelf({`;
+    expect(removeCallStatement(src, { start: 0, end: src.length })).toBe(src);
   });
 });

@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import { EXAMPLE_MODEL_SOURCE } from '@/model/example';
 import { runModel, type ParamDef, type RunResult } from '@/model/runtime';
-import { rewriteCallProperty } from '@/model/ast/rewrite';
+import { rewriteCallProperty, removeCallStatement } from '@/model/ast/rewrite';
 import { generateModel } from '@/model/llm';
 import type { SceneNode } from '@/domain/cabinet/types';
 import type { SourceEdit } from '@/domain/cabinet/actions';
@@ -30,6 +30,12 @@ interface ModelState {
    * is selected or the selection has no sourceRange.
    */
   setSelectionParam: (name: string, value: number) => void;
+  /**
+   * Removes the enclosing source statement of the currently-selected node,
+   * then clears the selection. No-op when nothing is selected or the
+   * selection has no sourceRange.
+   */
+  deleteSelection: () => void;
   select: (nodeId: string | null) => void;
   applyEdit: (edit: SourceEdit) => void;
 
@@ -71,6 +77,16 @@ export const useModelStore = create<ModelState>((set, get) => ({
     const next = rewriteCallProperty(source, node.sourceRange, name, value);
     if (next === source) return;
     set({ source: next, result: runModel(next) });
+  },
+
+  deleteSelection: () => {
+    const { source, selection, result } = get();
+    if (!selection) return;
+    const node = findNodeById(result.nodes, selection);
+    if (!node?.sourceRange) return;
+    const next = removeCallStatement(source, node.sourceRange);
+    if (next === source) return;
+    set({ source: next, selection: null, result: runModel(next) });
   },
 
   select: (nodeId) => set({ selection: nodeId }),

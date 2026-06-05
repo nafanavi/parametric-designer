@@ -140,3 +140,64 @@ export function rewriteCallProperty(
   if (!target) return source;
   return source.slice(0, target.valueRange.start) + String(value) + source.slice(target.valueRange.end);
 }
+
+// ─── deletion ──────────────────────────────────────────────────────
+
+/**
+ * Smallest source range of the statement that *contains* `callRange`.
+ * Looks at `ExpressionStatement` (e.g. `api.shelf({...});`) and
+ * `VariableDeclaration` (e.g. `const cab = api.cabinet({...});`).
+ * Returns null if the call isn't inside one of those.
+ */
+export function findEnclosingStatement(
+  source: string,
+  callRange: SourceRange,
+): SourceRange | null {
+  const ast = parseSource(source);
+  if (!ast) return null;
+
+  let best: SourceRange | null = null;
+
+  const consider = (node: Node) => {
+    if (node.start <= callRange.start && node.end >= callRange.end) {
+      if (!best || node.end - node.start < best.end - best.start) {
+        best = { start: node.start, end: node.end };
+      }
+    }
+  };
+
+  walkSimple(ast, {
+    ExpressionStatement: consider,
+    VariableDeclaration: consider,
+  });
+
+  return best;
+}
+
+/**
+ * Removes the enclosing statement that contains `callRange`, including its
+ * leading indentation and a single trailing newline (so we don't leave a
+ * blank line behind). Returns the source unchanged if no enclosing
+ * statement is found.
+ *
+ * Honest caveat: if downstream code references a name introduced by the
+ * deleted statement (e.g. deleting `const cab = api.cabinet(...)` while
+ * `api.shelf({ in: cab, ... })` remains), the resulting source will throw
+ * at runtime. We surface the error via `RunResult.error`; the caller is
+ * responsible for any cascade.
+ */
+export function removeCallStatement(source: string, callRange: SourceRange): string {
+  const stmt = findEnclosingStatement(source, callRange);
+  if (!stmt) return source;
+
+  // Scan back to the start of the line containing stmt.start.
+  let lineStart = stmt.start;
+  while (lineStart > 0 && source[lineStart - 1] !== '\n') lineStart--;
+
+  // Scan forward to (and past) the newline at the end of stmt.end's line.
+  let lineEnd = stmt.end;
+  while (lineEnd < source.length && source[lineEnd] !== '\n') lineEnd++;
+  if (lineEnd < source.length) lineEnd++; // consume the newline itself
+
+  return source.slice(0, lineStart) + source.slice(lineEnd);
+}

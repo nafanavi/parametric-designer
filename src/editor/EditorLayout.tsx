@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { useModelStore } from '@/store/modelStore';
 import { ActionToolbar } from './ActionToolbar';
@@ -18,6 +19,25 @@ const Scene = dynamic(() => import('@/viewer/Scene').then((m) => m.Scene), {
 
 export function EditorLayout() {
   const promptOpen = useModelStore((s) => s.promptOpen);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete') return;
+      // Don't hijack Delete inside the source/prompt textareas, property-
+      // panel number inputs, or any contentEditable region.
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
+
+      const state = useModelStore.getState();
+      if (!state.selection) return;
+
+      e.preventDefault();
+      state.deleteSelection();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   return (
     <div className="flex flex-col h-screen bg-panel text-gray-100">

@@ -120,6 +120,48 @@ describe('modelStore — per-instance setSelectionParam', () => {
     expect(widths).toEqual([800, 1200, 800]);
   });
 
+  it('deleteSelection: no-op when nothing is selected', () => {
+    const before = SOURCE();
+    useModelStore.getState().deleteSelection();
+    expect(SOURCE()).toBe(before);
+  });
+
+  it('deleteSelection: removes the selected cabinet from source and clears selection', () => {
+    const cabinets = RESULT().nodes.filter((n) => n.type === 'cabinet');
+    expect(cabinets).toHaveLength(3);
+    useModelStore.getState().select(cabinets[1].id);
+
+    useModelStore.getState().deleteSelection();
+
+    // Selection cleared.
+    expect(useModelStore.getState().selection).toBeNull();
+    // One fewer cabinet in the scene.
+    const after = RESULT().nodes.filter((n) => n.type === 'cabinet');
+    expect(after).toHaveLength(2);
+    // Source no longer mentions the middle cabinet's position.
+    expect(SOURCE()).not.toContain('[1000, 0, 0]');
+  });
+
+  it('deleteSelection: removes a leaf (door) without touching its cabinet', () => {
+    // The example source has cabinets + doors; THREE_DISTINCT_CABINETS doesn't.
+    resetStore(EXAMPLE_MODEL_SOURCE);
+    const doorsBefore = RESULT().nodes.flatMap((c) =>
+      c.children.filter((ch) => ch.type === 'door'),
+    );
+    expect(doorsBefore).toHaveLength(6); // 3 cabinets × 2 doors
+
+    useModelStore.getState().select(doorsBefore[0].id);
+    useModelStore.getState().deleteSelection();
+
+    // Cabinets all still present.
+    expect(RESULT().nodes.filter((n) => n.type === 'cabinet')).toHaveLength(3);
+    // One fewer door.
+    const doorsAfter = RESULT().nodes.flatMap((c) =>
+      c.children.filter((ch) => ch.type === 'door'),
+    );
+    expect(doorsAfter).toHaveLength(5);
+  });
+
   it('shared source (loops): editing a looped call propagates to every iteration', () => {
     // Honest behaviour reminder: if the user writes a loop that produces
     // multiple cabinets from ONE source call, those cabinets all read the
