@@ -5,6 +5,7 @@ import { EXAMPLE_MODEL_SOURCE } from '@/model/example';
 import { runModel, type ParamDef, type RunResult } from '@/model/runtime';
 import { rewriteCallProperty, removeCallStatement } from '@/model/ast/rewrite';
 import { generateModel } from '@/model/llm';
+import { repairSource } from '@/model/repair';
 import type { SceneNode } from '@/domain/cabinet/types';
 import type { SourceEdit } from '@/domain/cabinet/actions';
 
@@ -27,15 +28,18 @@ interface ModelState {
    * Per-instance edit: rewrites a property of the currently-selected node's
    * source call. If the selected value was a `param(...)` read, the call is
    * decoupled from that param (it now carries a literal). No-op when nothing
-   * is selected or the selection has no sourceRange.
+   * is selected or the selection has no sourceRange. Async because the
+   * commit may invoke a silent LLM repair pass when the edit produces source
+   * that throws — see `commitSource`.
    */
-  setSelectionParam: (name: string, value: number) => void;
+  setSelectionParam: (name: string, value: number) => Promise<void>;
   /**
    * Removes the enclosing source statement of the currently-selected node,
    * then clears the selection. No-op when nothing is selected or the
-   * selection has no sourceRange.
+   * selection has no sourceRange. Async for the same reason as
+   * `setSelectionParam` — see `commitSource`.
    */
-  deleteSelection: () => void;
+  deleteSelection: () => Promise<void>;
   select: (nodeId: string | null) => void;
   applyEdit: (edit: SourceEdit) => void;
 
@@ -56,7 +60,50 @@ function findNodeById(nodes: readonly SceneNode[], id: string): SceneNode | null
 
 const initialResult = runModel(EXAMPLE_MODEL_SOURCE);
 
-export const useModelStore = create<ModelState>((set, get) => ({
+export const useModelStore = create<ModelState>((set, get) => {
+  /**
+   * Single commit seam for mutating actions (delete, per-instance param edit,
+   * future direct-manipulation). Pipeline:
+   *
+   *   1. If the proposed source equals the current source, no-op.
+   *   2. Evaluate proposed. If it runs cleanly, commit (apply onSuccess).
+   *   3. If it throws, ask the LLM to repair it once. If repair returns a
+   *      source that runs cleanly, commit that instead.
+   *   4. Otherwise silently leave previous state in place — the action
+   *      "didn't take." onSuccess is NOT applied in this case (selection
+   *      stays put, etc.).
+   *
+   * The LLM repair is invisible to the user. There is no spinner, no error
+   * surface; latency is paid only on the rare path where the proposed
+   * source actually throws.
+   */
+  async function commitSource(
+    proposed: string,
+    onSuccess: Partial<ModelState> = {},
+  ): Promise<void> {
+    const previous = get().source;
+    if (proposed === previous) return;
+
+    const result = runModel(proposed);
+    if (!result.error) {
+      set({ source: proposed, result, ...onSuccess });
+      return;
+    }
+
+    // Proposed source throws. One LLM repair attempt, then silent revert.
+    const repair = await repairSource({
+      previous,
+      proposed,
+      error: result.error,
+    });
+    if (repair.status !== 'success') return;
+
+    const repairedRun = runModel(repair.source);
+    if (repairedRun.error) return; // still broken — give up silently
+    set({ source: repair.source, result: repairedRun, ...onSuccess });
+  }
+
+  return {
   source: EXAMPLE_MODEL_SOURCE,
   selection: null,
   result: initialResult,
@@ -66,27 +113,28 @@ export const useModelStore = create<ModelState>((set, get) => ({
   promptHeight: 240,
 
   setSource: (source) => {
+    // Debug textarea path. We deliberately do NOT route through commitSource
+    // here — the developer is editing source directly and any runtime error
+    // is intentional signal, not something to silently repair.
     set({ source, result: runModel(source) });
   },
 
-  setSelectionParam: (name, value) => {
+  setSelectionParam: async (name, value) => {
     const { source, selection, result } = get();
     if (!selection) return;
     const node = findNodeById(result.nodes, selection);
     if (!node?.sourceRange) return;
     const next = rewriteCallProperty(source, node.sourceRange, name, value);
-    if (next === source) return;
-    set({ source: next, result: runModel(next) });
+    await commitSource(next);
   },
 
-  deleteSelection: () => {
+  deleteSelection: async () => {
     const { source, selection, result } = get();
     if (!selection) return;
     const node = findNodeById(result.nodes, selection);
     if (!node?.sourceRange) return;
     const next = removeCallStatement(source, node.sourceRange);
-    if (next === source) return;
-    set({ source: next, selection: null, result: runModel(next) });
+    await commitSource(next, { selection: null });
   },
 
   select: (nodeId) => set({ selection: nodeId }),
@@ -132,6 +180,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
       set({ promptStatus: { kind: result.status, message: result.message } });
     }
   },
-}));
+  };
+});
 
 export type { ParamDef };
