@@ -19,6 +19,14 @@ interface ModelState {
   selection: string | null;
   result: RunResult;
 
+  /**
+   * True only while a silent LLM repair is in flight inside `commitSource`.
+   * Stays false on the happy path (clean delete/edit) so the viewport never
+   * flashes a spinner for sub-millisecond commits. Driven by the store, read
+   * by the viewport overlay.
+   */
+  isRepairing: boolean;
+
   promptOpen: boolean;
   promptStatus: PromptStatus;
   promptHeight: number;
@@ -91,22 +99,31 @@ export const useModelStore = create<ModelState>((set, get) => {
     }
 
     // Proposed source throws. One LLM repair attempt, then silent revert.
-    const repair = await repairSource({
-      previous,
-      proposed,
-      error: result.error,
-    });
-    if (repair.status !== 'success') return;
+    // The viewport overlay reads `isRepairing` and shows a loader while we
+    // wait — only on this rare path, never on the happy path above.
+    set({ isRepairing: true });
+    try {
+      const repair = await repairSource({
+        previous,
+        proposed,
+        error: result.error,
+      });
+      if (repair.status !== 'success') return;
 
-    const repairedRun = runModel(repair.source);
-    if (repairedRun.error) return; // still broken — give up silently
-    set({ source: repair.source, result: repairedRun, ...onSuccess });
+      const repairedRun = runModel(repair.source);
+      if (repairedRun.error) return; // still broken — give up silently
+      set({ source: repair.source, result: repairedRun, ...onSuccess });
+    } finally {
+      set({ isRepairing: false });
+    }
   }
 
   return {
   source: EXAMPLE_MODEL_SOURCE,
   selection: null,
   result: initialResult,
+
+  isRepairing: false,
 
   promptOpen: false,
   promptStatus: { kind: 'idle' },
