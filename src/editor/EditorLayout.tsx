@@ -19,7 +19,6 @@ const Scene = dynamic(() => import('@/viewer/Scene').then((m) => m.Scene), {
 
 export function EditorLayout() {
   const promptOpen = useModelStore((s) => s.promptOpen);
-  const isRepairing = useModelStore((s) => s.isRepairing);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -69,18 +68,6 @@ export function EditorLayout() {
         </div>
         <div className="relative min-h-0 min-w-0 overflow-hidden">
           <Scene />
-          {isRepairing && (
-            <div
-              className="absolute inset-0 flex items-center justify-center bg-black/30 backdrop-blur-[1px] pointer-events-none"
-              aria-live="polite"
-              aria-busy="true"
-            >
-              <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-panel-2/90 border border-border shadow-lg">
-                <span className="w-3 h-3 rounded-full border-2 border-orange-400 border-t-transparent animate-spin" />
-                <span className="text-xs text-gray-200">Updating…</span>
-              </div>
-            </div>
-          )}
         </div>
         <PropertyPanel />
       </main>
