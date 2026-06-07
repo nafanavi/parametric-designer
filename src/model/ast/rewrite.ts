@@ -1,4 +1,4 @@
-import { simple as walkSimple } from 'acorn-walk';
+import { simple as walkSimple, ancestor as walkAncestor } from 'acorn-walk';
 import type { Node } from 'acorn';
 import { parseSource } from './parse';
 import type { SourceRange } from './types';
@@ -139,4 +139,122 @@ export function rewriteCallProperty(
   const target = findCallProperties(source, callRange).find((p) => p.name === propertyName);
   if (!target) return source;
   return source.slice(0, target.valueRange.start) + String(value) + source.slice(target.valueRange.end);
+}
+
+// ─── deletion ──────────────────────────────────────────────────────
+
+/**
+ * Smallest source range of the statement that *contains* `callRange`.
+ * Looks at `ExpressionStatement` (e.g. `api.shelf({...});`) and
+ * `VariableDeclaration` (e.g. `const cab = api.cabinet({...});`).
+ * Returns null if the call isn't inside one of those.
+ *
+ * When the enclosing statement is the braceless body of a control statement
+ * (`if`/`else`/`while`/`do`/`for`/`for-in`/`for-of`), the range is lifted
+ * to the control statement itself — deleting just the body would otherwise
+ * leave the control attached to whatever comes next, silently shifting
+ * semantics with no runtime error to trigger repair. We climb the ancestor
+ * chain repeatedly so nested braceless bodies (`if (a) if (b) shelf();`)
+ * lift all the way out.
+ */
+interface NodeWithSlots extends Node {
+  type: string;
+  body?: Node;
+  consequent?: Node;
+  alternate?: Node;
+}
+
+function liftThroughBracelessControl(
+  ancestors: readonly Node[],
+  start: number,
+  end: number,
+): { start: number; end: number } {
+  let curStart = start;
+  let curEnd = end;
+  // ancestors[len-1] is the matched node itself; walk parents leaf→root.
+  for (let i = ancestors.length - 2; i >= 0; i--) {
+    const parent = ancestors[i] as NodeWithSlots;
+    const directBody =
+      (parent.type === 'IfStatement' &&
+        ((parent.consequent && parent.consequent.start === curStart && parent.consequent.end === curEnd) ||
+          (parent.alternate && parent.alternate.start === curStart && parent.alternate.end === curEnd))) ||
+      ((parent.type === 'WhileStatement' ||
+        parent.type === 'DoWhileStatement' ||
+        parent.type === 'ForStatement' ||
+        parent.type === 'ForInStatement' ||
+        parent.type === 'ForOfStatement') &&
+        parent.body &&
+        parent.body.start === curStart &&
+        parent.body.end === curEnd);
+    if (!directBody) break;
+    curStart = parent.start;
+    curEnd = parent.end;
+  }
+  return { start: curStart, end: curEnd };
+}
+
+export function findEnclosingStatement(
+  source: string,
+  callRange: SourceRange,
+): SourceRange | null {
+  const ast = parseSource(source);
+  if (!ast) return null;
+
+  let best: SourceRange | null = null;
+
+  const consider = (node: Node, ancestors: readonly Node[]) => {
+    if (node.start > callRange.start || node.end < callRange.end) return;
+    const lifted = liftThroughBracelessControl(ancestors, node.start, node.end);
+    if (!best || lifted.end - lifted.start < best.end - best.start) {
+      best = lifted;
+    }
+  };
+
+  walkAncestor(ast, {
+    ExpressionStatement(node, _state, ancestors) {
+      consider(node, ancestors as readonly Node[]);
+    },
+    VariableDeclaration(node, _state, ancestors) {
+      consider(node, ancestors as readonly Node[]);
+    },
+  });
+
+  return best;
+}
+
+/**
+ * Removes the enclosing statement that contains `callRange`, including its
+ * leading indentation and a single trailing newline (so we don't leave a
+ * blank line behind). Returns the source unchanged if no enclosing
+ * statement is found.
+ *
+ * Honest caveat: if downstream code references a name introduced by the
+ * deleted statement (e.g. deleting `const cab = api.cabinet(...)` while
+ * `api.shelf({ in: cab, ... })` remains), the resulting source will throw
+ * at runtime. We surface the error via `RunResult.error`; the caller is
+ * responsible for any cascade.
+ */
+export function removeCallStatement(source: string, callRange: SourceRange): string {
+  const stmt = findEnclosingStatement(source, callRange);
+  if (!stmt) return source;
+
+  // Find the bounds of the source line containing stmt.
+  let lineStart = stmt.start;
+  while (lineStart > 0 && source[lineStart - 1] !== '\n') lineStart--;
+  let lineEnd = stmt.end;
+  while (lineEnd < source.length && source[lineEnd] !== '\n') lineEnd++;
+
+  // Only consume leading indent / trailing newline when the statement is
+  // alone on its line. Otherwise — e.g. `const a = api.cabinet(...); api.shelf(...);`
+  // on a single line — a whole-line delete would silently take out the
+  // sibling. Mixed lines fall back to deleting just stmt.start..stmt.end so
+  // unrelated code is preserved (at the cost of a leftover space or two).
+  const leadingIsWhitespace = /^\s*$/.test(source.slice(lineStart, stmt.start));
+  const trailingIsWhitespace = /^\s*$/.test(source.slice(stmt.end, lineEnd));
+
+  if (leadingIsWhitespace && trailingIsWhitespace) {
+    const consumeNewline = lineEnd < source.length ? 1 : 0;
+    return source.slice(0, lineStart) + source.slice(lineEnd + consumeNewline);
+  }
+  return source.slice(0, stmt.start) + source.slice(stmt.end);
 }

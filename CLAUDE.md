@@ -50,13 +50,31 @@ Before changing a layer, read the relevant contract:
 - New verticals go in [src/domain/<area>/](src/domain/). The CoreAPI must not gain domain knowledge.
 - Implementation conventions (how nodes register, how params are declared, how the runtime tracks call origins) live in the code and may evolve. Refer to current files when in doubt; flag any change that conflicts with Core idea.
 
+### Reviewing user proposals
+
+When the user suggests an implementation approach, **don't jump straight to coding it**. First respond as an independent senior engineer:
+
+- Analyse the proposal on its own merits — what it gets right, what's risky, what's load-bearing vs. incidental.
+- If you see a materially better alternative, propose it. Explain *in detail* why it fits this codebase better — cite the Core idea constraints it preserves, the layers it touches, the failure modes it avoids, the trade-offs it accepts. Vague "this is cleaner" is not enough; the user should be able to weigh the two approaches concretely.
+- If the user's proposal is already the right call, say so plainly and proceed. Don't manufacture alternatives for the sake of it.
+- Only start implementing once the user has chosen a direction.
+
 ### Plan log
 
-Whenever you produce a non-trivial refactoring plan, code review, design proposal, or "here's what I'd do next" recommendation, **also save it as a Markdown file to [.notes/plans/](.notes/plans/)** — git-ignored, sortable.
+Whenever you produce a non-trivial refactoring plan, design proposal, or "here's what I'd do next" recommendation, **also save it as a Markdown file to [.notes/plans/](.notes/plans/)** — git-ignored, sortable.
 
 - Filename: `YYYY-MM-DD-HHMM-<kebab-slug>.md` (run `date +%Y-%m-%d-%H%M` for the timestamp).
 - Body: the proposal itself in Markdown, with a brief header (date, trigger, status). Cross-link to relevant source files with relative paths.
 - Don't save trivial confirmations or one-line suggestions. Save anything that the user might want to revisit later as a design record.
+
+### Review log
+
+Whenever you run a non-trivial code review (e.g. `/code-review`, `/security-review`, or a manual pass), **also save the findings as a Markdown file to [.notes/reviews/](.notes/reviews/)** — git-ignored, sortable. Same filename convention as the Plan log.
+
+- Filename: `YYYY-MM-DD-HHMM-<kebab-slug>.md`.
+- Header: date, branch, reviewed range (e.g. `git diff master...HEAD`), reviewer/tool, status.
+- Body: findings ranked by severity. Each finding gets a one-line summary, a `file:line` link, a concrete failure scenario, and a fix direction. Note REFUTED candidates briefly if they're useful to remember.
+- Don't save trivial "looks good" passes. Save anything with at least one actionable finding worth revisiting.
 
 ## Known shortcuts (scratch-stage, not load-bearing)
 
