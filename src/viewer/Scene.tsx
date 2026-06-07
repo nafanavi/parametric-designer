@@ -46,12 +46,10 @@ export function Scene() {
   const result = useModelStore((s) => s.result);
   const selection = useModelStore((s) => s.selection);
   const isRepairing = useModelStore((s) => s.isRepairing);
-  const rawSelect = useModelStore((s) => s.select);
-
-  // Gate selection changes while a repair is in flight. Camera controls and
-  // hover effects stay live — the user can still orbit/inspect, just can't
-  // re-target the action until the in-flight one settles.
-  const select = isRepairing ? () => {} : rawSelect;
+  const select = useModelStore((s) => s.select);
+  // The selection-during-repair gate lives in the store action itself, so
+  // every caller (this viewport, the Delete keydown, the property panel,
+  // future drag handles) goes through one source of truth.
 
   const allLeaves = Array.from(leaves(result.nodes));
 

@@ -257,4 +257,71 @@ describe('removeCallStatement', () => {
     const src = `api.shelf({`;
     expect(removeCallStatement(src, { start: 0, end: src.length })).toBe(src);
   });
+
+  // Regression for review finding #2: a whole-line scan used to eat sibling
+  // statements that happened to share a line with the target.
+  it('does not eat sibling statements that share a line', () => {
+    const src = `const a = api.cabinet({ width: 800 }); api.shelf({ in: a, y: 600 });\n`;
+    const cabStart = src.indexOf('api.cabinet');
+    // Range of api.cabinet({...}) — the CallExpression itself, not the decl.
+    const cabRange = {
+      start: cabStart,
+      end: cabStart + `api.cabinet({ width: 800 })`.length,
+    };
+    const out = removeCallStatement(src, cabRange);
+    // The shelf must survive.
+    expect(out).toContain('api.shelf({ in: a, y: 600 })');
+    // The cabinet declaration is gone.
+    expect(out).not.toContain('api.cabinet');
+  });
+
+  // Regression for review finding #3: deleting the braceless body of an if/
+  // while/for used to leave the control attached to whatever came next,
+  // silently rebinding semantics. The fix lifts the deletion to the parent.
+  it('lifts the deletion past a braceless `if` body', () => {
+    const src =
+      `const a = api.cabinet({ width: 800 });\n` +
+      `if (a.params.width > 600) api.shelf({ in: a, y: 600 });\n` +
+      `api.door({ in: a, side: 'left' });\n`;
+    const shelfStart = src.indexOf('api.shelf');
+    const shelfRange = {
+      start: shelfStart,
+      end: shelfStart + `api.shelf({ in: a, y: 600 })`.length,
+    };
+    const out = removeCallStatement(src, shelfRange);
+    // The whole `if (...) ...;` line is gone — the door is no longer conditional.
+    expect(out).toBe(
+      `const a = api.cabinet({ width: 800 });\n` +
+        `api.door({ in: a, side: 'left' });\n`,
+    );
+  });
+
+  it('lifts the deletion past a braceless `while` body', () => {
+    const src = `let i = 0;\nwhile (i < 3) api.shelf({ in: a, y: 100 * i++ });\n`;
+    const shelfStart = src.indexOf('api.shelf');
+    const shelfRange = {
+      start: shelfStart,
+      end: shelfStart + `api.shelf({ in: a, y: 100 * i++ })`.length,
+    };
+    const out = removeCallStatement(src, shelfRange);
+    expect(out).toBe(`let i = 0;\n`);
+  });
+
+  it('does NOT lift when the body is wrapped in a block', () => {
+    const src =
+      `if (cond) {\n` +
+      `  api.shelf({ in: a, y: 600 });\n` +
+      `  api.door({ in: a, side: 'left' });\n` +
+      `}\n`;
+    const shelfStart = src.indexOf('api.shelf');
+    const shelfRange = {
+      start: shelfStart,
+      end: shelfStart + `api.shelf({ in: a, y: 600 })`.length,
+    };
+    const out = removeCallStatement(src, shelfRange);
+    // The if and the door are preserved; only the shelf line is gone.
+    expect(out).toBe(
+      `if (cond) {\n` + `  api.door({ in: a, side: 'left' });\n` + `}\n`,
+    );
+  });
 });

@@ -89,6 +89,13 @@ export const useModelStore = create<ModelState>((set, get) => {
     proposed: string,
     onSuccess: Partial<ModelState> = {},
   ): Promise<void> {
+    // While a repair is in flight, drop every other mutating action. This is
+    // the single gate; per-component wrappers (Scene's select gate, the Delete
+    // keydown) are no longer needed. Without this, a second Delete during
+    // repair would fire a second /api/repair fetch in parallel and the
+    // finally{} blocks would race the isRepairing flag.
+    if (get().isRepairing) return;
+
     const previous = get().source;
     if (proposed === previous) return;
 
@@ -112,6 +119,13 @@ export const useModelStore = create<ModelState>((set, get) => {
 
       const repairedRun = runModel(repair.source);
       if (repairedRun.error) return; // still broken — give up silently
+
+      // Lost-update guard: source may have moved during the await (e.g. the
+      // user typed in the debug textarea, which bypasses commitSource on
+      // purpose). If it has, this repair is stale — drop it instead of
+      // clobbering the user's intermediate edit.
+      if (get().source !== previous) return;
+
       set({ source: repair.source, result: repairedRun, ...onSuccess });
     } finally {
       set({ isRepairing: false });
@@ -154,7 +168,14 @@ export const useModelStore = create<ModelState>((set, get) => {
     await commitSource(next, { selection: null });
   },
 
-  select: (nodeId) => set({ selection: nodeId }),
+  select: (nodeId) => {
+    // Selection changes are also dropped during a repair — keeps the
+    // selected part anchored to the in-flight action so the spinner stays
+    // pinned and `onSuccess: { selection: null }` clears the right node
+    // when the repair lands.
+    if (get().isRepairing) return;
+    set({ selection: nodeId });
+  },
 
   applyEdit: (edit) => {
     const { source } = get();

@@ -167,6 +167,103 @@ describe('modelStore — silent repair pipeline', () => {
     });
   });
 
+  // Regression for review finding #4: a second mutation triggered while a
+  // repair is in flight used to fire a parallel /api/repair fetch and race
+  // the isRepairing flag. The store-level gate drops re-entrant calls.
+  describe('repair is the single in-flight gate', () => {
+    it('drops a second deleteSelection while a repair is in flight', async () => {
+      resetStore(REFERENCING_CABINET);
+      const cabinets = RESULT().nodes.filter((n) => n.type === 'cabinet');
+      useModelStore.getState().select(cabinets[0].id);
+
+      // Make the first repair await an externally-resolved promise so we can
+      // fire a second action while it's mid-flight.
+      let resolveFirst: (v: { status: 'success'; source: string; message: string }) => void;
+      const firstRepair = new Promise<{ status: 'success'; source: string; message: string }>(
+        (r) => {
+          resolveFirst = r;
+        },
+      );
+      repairMock.mockReturnValueOnce(firstRepair);
+
+      const firstCall = useModelStore.getState().deleteSelection();
+
+      // While the repair is in flight, isRepairing is true and a second
+      // deleteSelection must no-op (otherwise we race the flag + bill twice).
+      expect(useModelStore.getState().isRepairing).toBe(true);
+      await useModelStore.getState().deleteSelection();
+      expect(repairMock).toHaveBeenCalledTimes(1);
+
+      // Finish the first repair so the test isolation is clean.
+      resolveFirst!({ status: 'success', source: '// auto-repaired\n', message: 'ok' });
+      await firstCall;
+      expect(useModelStore.getState().isRepairing).toBe(false);
+    });
+
+    it('drops a select() call while a repair is in flight', async () => {
+      resetStore(REFERENCING_CABINET);
+      const cabinets = RESULT().nodes.filter((n) => n.type === 'cabinet');
+      const originalId = cabinets[0].id;
+      useModelStore.getState().select(originalId);
+
+      let resolveFirst: (v: { status: 'success'; source: string; message: string }) => void;
+      const firstRepair = new Promise<{ status: 'success'; source: string; message: string }>(
+        (r) => {
+          resolveFirst = r;
+        },
+      );
+      repairMock.mockReturnValueOnce(firstRepair);
+
+      const inFlight = useModelStore.getState().deleteSelection();
+
+      // Attempt to retarget selection mid-repair — must no-op.
+      useModelStore.getState().select('cabinet#impossible');
+      expect(useModelStore.getState().selection).toBe(originalId);
+
+      resolveFirst!({ status: 'success', source: '// auto-repaired\n', message: 'ok' });
+      await inFlight;
+    });
+  });
+
+  // Regression for review finding #1: source moved during the repair await
+  // (e.g. user typed in the debug textarea) — the late repair commit must
+  // NOT clobber the intervening change.
+  describe('lost-update guard', () => {
+    it('does not commit repaired source when source was changed during the await', async () => {
+      resetStore(REFERENCING_CABINET);
+      const cabinets = RESULT().nodes.filter((n) => n.type === 'cabinet');
+      useModelStore.getState().select(cabinets[0].id);
+
+      let resolveRepair: (v: { status: 'success'; source: string; message: string }) => void;
+      const repairPromise = new Promise<{ status: 'success'; source: string; message: string }>(
+        (r) => {
+          resolveRepair = r;
+        },
+      );
+      repairMock.mockReturnValueOnce(repairPromise);
+
+      const inFlight = useModelStore.getState().deleteSelection();
+
+      // Mid-repair: developer types in the debug textarea (setSource bypasses
+      // commitSource by design). The repair, when it lands, must not overwrite
+      // this.
+      const userTyped = `api.cabinet({ width: 1234, height: 1000, depth: 200, thickness: 18, position: [0, 0, 0] });\n`;
+      useModelStore.getState().setSource(userTyped);
+      expect(SOURCE()).toBe(userTyped);
+
+      resolveRepair!({
+        status: 'success',
+        source: `// auto-repaired\n`,
+        message: 'ok',
+      });
+      await inFlight;
+
+      // Repair was attempted but its commit was vetoed by the lost-update guard.
+      expect(SOURCE()).toBe(userTyped);
+      expect(useModelStore.getState().isRepairing).toBe(false);
+    });
+  });
+
   describe('setSelectionParam through the repair pipeline', () => {
     it('calls repair only when the edit actually breaks the source', async () => {
       // Authored source uses `cab.width` later — editing width via panel

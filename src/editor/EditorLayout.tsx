@@ -22,9 +22,11 @@ export function EditorLayout() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete') return;
-      // Don't hijack Delete inside the source/prompt textareas, property-
-      // panel number inputs, or any contentEditable region.
+      // Forward-Delete on full keyboards; Backspace covers Mac laptops, whose
+      // only "delete" key emits 'Backspace'.
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      // Don't hijack Delete/Backspace inside the source/prompt textareas,
+      // property-panel number inputs, or any contentEditable region.
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
