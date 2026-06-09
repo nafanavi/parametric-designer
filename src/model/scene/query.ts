@@ -39,21 +39,23 @@ const OVERLAP_TOLERANCE_MM = 0.5;
  *
  * Coordinates are in millimetres throughout — same as the model authoring
  * convention.
+ *
+ * `queryOf(result)` (below) memoises one SceneQuery per `RunResult` so
+ * repeated callers (the store on every keystroke, the viewport on every
+ * render) don't re-walk the tree.
  */
 export class SceneQuery {
   private readonly byId = new Map<string, SceneNode>();
-  private readonly parentOf = new Map<string, string>();
   private readonly aabbCache = new Map<string, AABB>();
 
   constructor(private readonly result: RunResult) {
-    const walk = (nodes: readonly SceneNode[], parent: SceneNode | null) => {
+    const walk = (nodes: readonly SceneNode[]) => {
       for (const n of nodes) {
         this.byId.set(n.id, n);
-        if (parent) this.parentOf.set(n.id, parent.id);
-        if (n.children.length) walk(n.children, n);
+        if (n.children.length) walk(n.children);
       }
     };
-    walk(result.nodes, null);
+    walk(result.nodes);
   }
 
   getNode(id: string): SceneNode | null {
@@ -61,7 +63,7 @@ export class SceneQuery {
   }
 
   parent(id: string): string | null {
-    return this.parentOf.get(id) ?? null;
+    return this.byId.get(id)?.parentId ?? null;
   }
 
   summarize(id: string): NodeSummary | null {
@@ -73,7 +75,7 @@ export class SceneQuery {
       type: node.type,
       callIndex: node.callIndex,
       sourceRange: node.sourceRange ?? null,
-      parentId: this.parentOf.get(id) ?? null,
+      parentId: node.parentId,
       params: node.params as unknown as Record<string, unknown>,
       aabb,
       center: centerOf(aabb),
@@ -218,6 +220,24 @@ function relativePosition(a: AABB, b: AABB):
 function perpOverlap(a: AABB, b: AABB, axis: number): boolean {
   return a.min[axis] < b.max[axis] - OVERLAP_TOLERANCE_MM
     && a.max[axis] > b.min[axis] + OVERLAP_TOLERANCE_MM;
+}
+
+/**
+ * Memoised `SceneQuery` factory keyed on `RunResult` identity. A given
+ * `RunResult` builds its query once and reuses it for every subsequent
+ * caller — store actions, viewport renders, LLM tools — until that
+ * `RunResult` is replaced by the next `runModel(...)`. Old `RunResult`s
+ * are GC'd along with their cached queries (WeakMap).
+ */
+const queryCache = new WeakMap<RunResult, SceneQuery>();
+
+export function queryOf(result: RunResult): SceneQuery {
+  let q = queryCache.get(result);
+  if (!q) {
+    q = new SceneQuery(result);
+    queryCache.set(result, q);
+  }
+  return q;
 }
 
 // re-export SolidId type-only for callers needing it alongside this module

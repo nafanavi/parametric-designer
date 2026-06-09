@@ -6,7 +6,7 @@ import { runModel, type ParamDef, type RunResult } from '@/model/runtime';
 import { rewriteCallProperty, removeCallStatement } from '@/model/ast/rewrite';
 import { generateModel } from '@/model/llm';
 import { repairSource } from '@/model/repair';
-import type { SceneNode } from '@/domain/cabinet/types';
+import { queryOf } from '@/model/scene/query';
 import type { SourceEdit } from '@/domain/cabinet/actions';
 
 export interface PromptStatus {
@@ -55,15 +55,6 @@ interface ModelState {
   setPromptOpen: (open: boolean) => void;
   setPromptHeight: (height: number) => void;
   submitPrompt: (text: string) => Promise<void>;
-}
-
-function findNodeById(nodes: readonly SceneNode[], id: string): SceneNode | null {
-  for (const n of nodes) {
-    if (n.id === id) return n;
-    const child = findNodeById(n.children, id);
-    if (child) return child;
-  }
-  return null;
 }
 
 const initialResult = runModel(EXAMPLE_MODEL_SOURCE);
@@ -153,7 +144,7 @@ export const useModelStore = create<ModelState>((set, get) => {
   setSelectionParam: async (name, value) => {
     const { source, selection, result } = get();
     if (!selection) return;
-    const node = findNodeById(result.nodes, selection);
+    const node = queryOf(result).getNode(selection);
     if (!node?.sourceRange) return;
     const next = rewriteCallProperty(source, node.sourceRange, name, value);
     await commitSource(next);
@@ -162,7 +153,7 @@ export const useModelStore = create<ModelState>((set, get) => {
   deleteSelection: async () => {
     const { source, selection, result } = get();
     if (!selection) return;
-    const node = findNodeById(result.nodes, selection);
+    const node = queryOf(result).getNode(selection);
     if (!node?.sourceRange) return;
     const next = removeCallStatement(source, node.sourceRange);
     await commitSource(next, { selection: null });

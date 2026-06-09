@@ -18,6 +18,13 @@ export interface SceneNodeBase<T extends CabinetNodeType, P> {
   readonly params: P;
   readonly solids: readonly SolidId[];
   readonly children: readonly SceneNode[];
+  /**
+   * Id of the parent SceneNode, or `null` for top-level nodes. Set during
+   * `collect()` (legacy `in:` path) or `adopt()` (new `children: [...]` path).
+   * Id-only — no direct ref — to avoid cycles in serialization, structural
+   * clones, and debug output.
+   */
+  readonly parentId: string | null;
 }
 
 /**
@@ -82,20 +89,43 @@ export interface CabinetInput {
   readonly depth: number;
   readonly thickness: number;
   readonly position?: Vec3;
+  /**
+   * Inline children for this cabinet. Each entry is a SceneNode produced by
+   * another `api.X(...)` call (typically `api.shelf` / `api.door` /
+   * `api.drawer`). Those calls execute first and register as top-level
+   * nodes; the cabinet then adopts them via `ctx.adopt(...)`.
+   *
+   * PR-A note: adoption is mechanical only — `parentId` and the
+   * `children` array are updated, but the child's stored `position` is NOT
+   * re-interpreted relative to the cabinet. Authors mixing free-floating
+   * `api.shelf({y})` with `children: [...]` will see world-Y placement;
+   * cabinet-floor-relative `y` still requires the legacy `in:` parameter
+   * until PR-B replaces the position math.
+   */
+  readonly children?: readonly SceneNode[];
 }
 
 export interface ShelfInput {
-  /** Parent cabinet to mount this shelf inside. */
-  readonly in: SceneNode;
-  /** Height above the cabinet's floor, in millimetres. */
+  /**
+   * Parent cabinet to mount this shelf inside. Optional — when omitted, the
+   * shelf is created as a free-floating top-level node and can be adopted
+   * later via a cabinet's `children: [...]` field. With `in:`, `y` is
+   * height above the cabinet floor; without it, `y` is world-Y.
+   */
+  readonly in?: SceneNode;
+  /** Height in millimetres (cabinet-floor-relative with `in:`, world-Y without). */
   readonly y: number;
   /** Optional gap from the front edge. Defaults to 0. */
   readonly inset?: number;
 }
 
 export interface DoorInput {
-  /** Parent cabinet to mount this door on. */
-  readonly in: SceneNode;
+  /**
+   * Parent cabinet to mount this door on. Optional — when omitted, the door
+   * is created as a free-floating panel and can be adopted into a cabinet
+   * via its `children: [...]` field.
+   */
+  readonly in?: SceneNode;
   /** Which half (or all) of the cabinet front this door covers. */
   readonly side: 'left' | 'right' | 'full';
   /** Optional hinge override; defaults to `side === 'right' ? 'right' : 'left'`. */
@@ -103,9 +133,13 @@ export interface DoorInput {
 }
 
 export interface DrawerInput {
-  /** Parent cabinet to mount this drawer inside. */
-  readonly in: SceneNode;
-  /** Height of the drawer's bottom above the cabinet floor. */
+  /**
+   * Parent cabinet to mount this drawer inside. Optional — when omitted, the
+   * drawer renders as a free-floating box and can be adopted into a cabinet
+   * via its `children: [...]` field.
+   */
+  readonly in?: SceneNode;
+  /** Height in millimetres (cabinet-floor-relative with `in:`, world-Y without). */
   readonly y: number;
   /** Vertical span of the drawer. */
   readonly height: number;

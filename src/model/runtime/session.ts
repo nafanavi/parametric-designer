@@ -50,10 +50,22 @@ export class ModelEvaluationSession {
       collect: (node, parent) => {
         if (parent) {
           (parent.children as SceneNode[]).push(node);
+          (node as { parentId: string | null }).parentId = parent.id;
         } else {
           this._nodes.push(node);
         }
         return node;
+      },
+      adopt: (parent, child) => {
+        if (child.parentId !== null) {
+          throw new Error(
+            `Node ${child.id} is already a child of ${child.parentId} — a SceneNode cannot have two parents.`,
+          );
+        }
+        const idx = this._nodes.indexOf(child);
+        if (idx >= 0) this._nodes.splice(idx, 1);
+        (parent.children as SceneNode[]).push(child);
+        (child as { parentId: string | null }).parentId = parent.id;
       },
       currentSourceRange: () => this._currentSourceRange,
     };
