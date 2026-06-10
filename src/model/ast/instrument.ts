@@ -57,14 +57,34 @@ export function instrumentApiCalls(source: string, wrapperName = '__withLoc'): s
 
   if (wraps.length === 0) return source;
 
-  // Right-to-left so earlier offsets stay valid as we splice.
-  wraps.sort((a, b) => b.start - a.start);
-
-  let out = source;
+  // Position-event scan: at each char position emit any wrap-closes whose
+  // `end === pos`, then any wrap-opens whose `start === pos`, then the
+  // original char. Outer wraps open before inner (sorted by descending end
+  // at the same start) so the resulting source is well-formed for nested
+  // `api.cabinet({ children: [api.shelf(...)] })`-style calls.
+  const opensAt = new Map<number, Array<{ start: number; end: number }>>();
+  const closesAt = new Map<number, number>();
   for (const w of wraps) {
-    const original = out.slice(w.start, w.end);
-    const wrapped = `${wrapperName}(${w.start},${w.end},()=>${original})`;
-    out = out.slice(0, w.start) + wrapped + out.slice(w.end);
+    let list = opensAt.get(w.start);
+    if (!list) { list = []; opensAt.set(w.start, list); }
+    list.push(w);
+    closesAt.set(w.end, (closesAt.get(w.end) ?? 0) + 1);
+  }
+  for (const list of opensAt.values()) {
+    list.sort((a, b) => b.end - a.end);
+  }
+
+  let out = '';
+  for (let pos = 0; pos <= source.length; pos++) {
+    const closesHere = closesAt.get(pos) ?? 0;
+    for (let i = 0; i < closesHere; i++) out += ')';
+    const opensHere = opensAt.get(pos);
+    if (opensHere) {
+      for (const w of opensHere) {
+        out += `${wrapperName}(${w.start},${w.end},()=>`;
+      }
+    }
+    if (pos < source.length) out += source[pos];
   }
   return out;
 }

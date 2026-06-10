@@ -4,8 +4,8 @@ import { Canvas } from '@react-three/fiber';
 import { OrbitControls, Grid, Environment, Html } from '@react-three/drei';
 import { useModelStore } from '@/store/modelStore';
 import { SolidMesh } from './SolidMesh';
+import { queryOf } from '@/model/scene/query';
 import type { SceneNode } from '@/domain/cabinet/types';
-import type { CoreAPI } from '@/core/api';
 
 /** Flatten the scene tree to leaves (nodes that own their visible solids). */
 function* leaves(nodes: readonly SceneNode[]): Generator<SceneNode> {
@@ -16,30 +16,6 @@ function* leaves(nodes: readonly SceneNode[]): Generator<SceneNode> {
       yield* leaves(n.children);
     }
   }
-}
-
-/**
- * Combined AABB of every solid on `node` (in mm — the authoring space).
- * Returns null when the node has no solids. Used to anchor the repair
- * spinner above the part the user just acted on.
- */
-function aggregateAabb(
-  node: SceneNode,
-  core: CoreAPI,
-): { min: [number, number, number]; max: [number, number, number] } | null {
-  if (node.solids.length === 0) return null;
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-  for (const sid of node.solids) {
-    const aabb = core.snapshot(sid).aabb;
-    if (aabb.min[0] < minX) minX = aabb.min[0];
-    if (aabb.min[1] < minY) minY = aabb.min[1];
-    if (aabb.min[2] < minZ) minZ = aabb.min[2];
-    if (aabb.max[0] > maxX) maxX = aabb.max[0];
-    if (aabb.max[1] > maxY) maxY = aabb.max[1];
-    if (aabb.max[2] > maxZ) maxZ = aabb.max[2];
-  }
-  return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
 }
 
 export function Scene() {
@@ -56,11 +32,15 @@ export function Scene() {
   // Anchor for the repair spinner: top-centre of the selected leaf's AABB,
   // lifted 60mm so it floats just above the part. null on the happy path
   // (no repair in flight or nothing selected) — the spinner doesn't render.
+  // SceneQuery is memoised per RunResult, so this lookup is O(1) after the
+  // first call against a given result.
   let spinnerAnchor: [number, number, number] | null = null;
   if (isRepairing && selection) {
-    const node = allLeaves.find((n) => n.id === selection);
-    const bb = node ? aggregateAabb(node, result.core) : null;
-    if (bb) {
+    const bb = queryOf(result).aabbOf(selection);
+    const isEmpty =
+      bb.min[0] === 0 && bb.min[1] === 0 && bb.min[2] === 0 &&
+      bb.max[0] === 0 && bb.max[1] === 0 && bb.max[2] === 0;
+    if (!isEmpty) {
       spinnerAnchor = [
         (bb.min[0] + bb.max[0]) / 2,
         bb.max[1] + 60,

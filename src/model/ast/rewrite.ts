@@ -223,18 +223,95 @@ export function findEnclosingStatement(
 }
 
 /**
+ * If `callRange` is a direct element of an `ArrayExpression` (typically a
+ * cabinet's `children: [...]`), returns the byte slice to remove — the
+ * element plus its surrounding comma/whitespace, chosen so the array stays
+ * well-formed:
+ *
+ *   - non-last element: eat element + trailing comma + whitespace up to the
+ *     next element's start.
+ *   - last element: eat the preceding comma + whitespace + element.
+ *   - sole element: eat just the element.
+ *
+ * Returns null when the call isn't a direct array element. Multi-line and
+ * single-line arrays both work; we trim by source offsets, not by lines.
+ */
+interface ArrayExpressionNode extends Node {
+  type: 'ArrayExpression';
+  elements: Array<Node | null>;
+}
+
+export function findEnclosingArrayElement(
+  source: string,
+  callRange: SourceRange,
+): SourceRange | null {
+  const ast = parseSource(source);
+  if (!ast) return null;
+
+  let best: { array: ArrayExpressionNode; index: number; element: Node } | null = null;
+
+  walkAncestor(ast, {
+    ArrayExpression(node, _state, _ancestors) {
+      const arr = node as ArrayExpressionNode;
+      for (let i = 0; i < arr.elements.length; i++) {
+        const el = arr.elements[i];
+        if (!el) continue;
+        if (el.start === callRange.start && el.end === callRange.end) {
+          if (!best || arr.end - arr.start < best.array.end - best.array.start) {
+            best = { array: arr, index: i, element: el };
+          }
+        }
+      }
+    },
+  });
+
+  if (!best) return null;
+  // Compiler can't tell that `best` is non-null inside this closure variant.
+  const { array, index, element } = best as {
+    array: ArrayExpressionNode;
+    index: number;
+    element: Node;
+  };
+  const elements = array.elements;
+  const realElements = elements.filter((e): e is Node => e !== null);
+
+  if (realElements.length === 1) {
+    return { start: element.start, end: element.end };
+  }
+
+  // Find the index in the "real elements" sub-list. We treat null holes as
+  // anchors that don't participate in comma-eating.
+  const realIndex = realElements.indexOf(element);
+  if (realIndex < realElements.length - 1) {
+    // Non-last: extend forward to the next real element's start.
+    return { start: element.start, end: realElements[realIndex + 1].start };
+  }
+  // Last real element: extend backward to the previous real element's end.
+  return { start: realElements[realIndex - 1].end, end: element.end };
+}
+
+/**
  * Removes the enclosing statement that contains `callRange`, including its
  * leading indentation and a single trailing newline (so we don't leave a
  * blank line behind). Returns the source unchanged if no enclosing
  * statement is found.
  *
  * Honest caveat: if downstream code references a name introduced by the
- * deleted statement (e.g. deleting `const cab = api.cabinet(...)` while
- * `api.shelf({ in: cab, ... })` remains), the resulting source will throw
- * at runtime. We surface the error via `RunResult.error`; the caller is
- * responsible for any cascade.
+ * deleted statement (e.g. deleting `const a = api.cabinet(...)` while a
+ * sibling call still reads `a.params.width`), the resulting source will
+ * throw at runtime. We surface the error via `RunResult.error`; the caller
+ * is responsible for any cascade.
  */
 export function removeCallStatement(source: string, callRange: SourceRange): string {
+  // Children of `api.cabinet({ children: [...] })` aren't statements — they
+  // live as array elements. Try the array-element path first so that
+  // deleting a nested shelf removes just its slot, not the enclosing
+  // cabinet's whole statement.
+  const arrEl = findEnclosingArrayElement(source, callRange);
+  if (arrEl) {
+    return source.slice(0, arrEl.start) + source.slice(arrEl.end);
+  }
+
   const stmt = findEnclosingStatement(source, callRange);
   if (!stmt) return source;
 

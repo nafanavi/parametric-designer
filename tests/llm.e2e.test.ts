@@ -47,17 +47,19 @@ async function maybeLoadEnvLocal() {
   }
 }
 
-const TEST_SOURCE = `const cab = api.cabinet({
+const TEST_SOURCE = `api.cabinet({
   width: param('width', 800),
   height: param('height', 1800),
   depth: param('depth', 400),
   thickness: 18,
   position: [0, 0, 0],
+  children: [
+    api.shelf({ y: 600 }),
+    api.shelf({ y: 1200 }),
+    api.door({ side: 'left' }),
+    api.door({ side: 'right' }),
+  ],
 });
-api.shelf({ in: cab, y: 600 });
-api.shelf({ in: cab, y: 1200 });
-api.door({ in: cab, side: 'left' });
-api.door({ in: cab, side: 'right' });
 `;
 
 const TIMEOUT_MS = 30_000;

@@ -3,7 +3,7 @@ import type { SourceRange } from '@/model/ast/types';
 
 export type CabinetNodeType = 'cabinet' | 'panel' | 'shelf' | 'door' | 'drawer';
 
-export interface SceneNodeBase<T extends CabinetNodeType, P> {
+export interface SceneNodeBase<T extends CabinetNodeType, P, GI = undefined> {
   readonly type: T;
   readonly id: string;
   readonly callIndex: number;
@@ -18,14 +18,32 @@ export interface SceneNodeBase<T extends CabinetNodeType, P> {
   readonly params: P;
   readonly solids: readonly SolidId[];
   readonly children: readonly SceneNode[];
+  /**
+   * Id of the parent SceneNode, or `null` for top-level nodes. Set by the
+   * runtime during `collect()` or `adopt()`. Id-only — no direct ref — to
+   * avoid cycles in serialization, structural clones, and debug output.
+   */
+  readonly parentId: string | null;
+  /**
+   * Authoring input preserved so the runtime can re-derive this node's
+   * geometry against a parent — that is, when the node is consumed by a
+   * cabinet's `children: [...]` array via `adopt()`, the per-type geometry
+   * function is re-run with parent context and `params` + `solids` are
+   * replaced with the interior-fitted result. Set on shelf / door / drawer;
+   * undefined for nodes whose geometry is fully determined at call time
+   * (cabinet, panel, frame panels).
+   *
+   * Name reflects the use, not the value: this field only matters at
+   * adoption time. A top-level (un-adopted) node ignores it entirely.
+   */
+  readonly adoptionInput?: GI;
 }
 
 /**
  * Stored cabinet params — the resolved (post-default) values that the
  * SceneNode actually carries. `position` is required (defaults to [0,0,0]
- * are resolved at construction time). Cabinet is now a frame only: shelves,
- * doors, and drawers are added by separate `api.shelf` / `api.door` /
- * `api.drawer` calls referencing the cabinet via `in:`.
+ * are resolved at construction time). The cabinet is a frame only; its
+ * shelves / doors / drawers live in its `children: [...]` field.
  */
 export interface CabinetParams {
   readonly width: number;
@@ -65,12 +83,13 @@ export interface DrawerParams {
   readonly position: Vec3;
 }
 
-export type SceneNode =
-  | SceneNodeBase<'cabinet', CabinetParams>
-  | SceneNodeBase<'panel', PanelParams>
-  | SceneNodeBase<'shelf', ShelfParams>
-  | SceneNodeBase<'door', DoorParams>
-  | SceneNodeBase<'drawer', DrawerParams>;
+export type CabinetNode = SceneNodeBase<'cabinet', CabinetParams>;
+export type PanelNode = SceneNodeBase<'panel', PanelParams>;
+export type ShelfNode = SceneNodeBase<'shelf', ShelfParams, ShelfInput>;
+export type DoorNode = SceneNodeBase<'door', DoorParams, DoorInput>;
+export type DrawerNode = SceneNodeBase<'drawer', DrawerParams, DrawerInput>;
+
+export type SceneNode = CabinetNode | PanelNode | ShelfNode | DoorNode | DrawerNode;
 
 // ─── Input types (what users write in api.X({...})) ───
 // These are the *authoring* shape; the stored params above are computed
@@ -82,20 +101,29 @@ export interface CabinetInput {
   readonly depth: number;
   readonly thickness: number;
   readonly position?: Vec3;
+  /**
+   * Inline children for this cabinet. Each entry is a SceneNode produced by
+   * another `api.X(...)` call (typically `api.shelf` / `api.door` /
+   * `api.drawer`). Those calls execute first and register as top-level
+   * nodes; the cabinet then adopts each, re-deriving its geometry against
+   * the cabinet's interior (width minus frame thickness, `y` relative to
+   * the floor, etc.).
+   */
+  readonly children?: readonly SceneNode[];
 }
 
 export interface ShelfInput {
-  /** Parent cabinet to mount this shelf inside. */
-  readonly in: SceneNode;
-  /** Height above the cabinet's floor, in millimetres. */
+  /**
+   * Height in millimetres. Cabinet-floor-relative when the shelf is adopted
+   * into a cabinet via `children: [...]`; world-Y when the shelf is
+   * top-level (free-floating, e.g. dropped from a palette).
+   */
   readonly y: number;
   /** Optional gap from the front edge. Defaults to 0. */
   readonly inset?: number;
 }
 
 export interface DoorInput {
-  /** Parent cabinet to mount this door on. */
-  readonly in: SceneNode;
   /** Which half (or all) of the cabinet front this door covers. */
   readonly side: 'left' | 'right' | 'full';
   /** Optional hinge override; defaults to `side === 'right' ? 'right' : 'left'`. */
@@ -103,9 +131,10 @@ export interface DoorInput {
 }
 
 export interface DrawerInput {
-  /** Parent cabinet to mount this drawer inside. */
-  readonly in: SceneNode;
-  /** Height of the drawer's bottom above the cabinet floor. */
+  /**
+   * Height in millimetres. Cabinet-floor-relative when the drawer is
+   * adopted into a cabinet via `children: [...]`; world-Y when top-level.
+   */
   readonly y: number;
   /** Vertical span of the drawer. */
   readonly height: number;

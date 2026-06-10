@@ -5,27 +5,31 @@ import type {
   CabinetInput,
   CabinetParams,
   DoorInput,
-  DoorParams,
   DrawerInput,
-  DrawerParams,
   PanelInput,
   SceneNode,
   ShelfInput,
-  ShelfParams,
 } from './types';
+import { shelfGeometry, doorGeometry, drawerGeometry } from './geometry';
 
 /**
  * Context handed to a model script. The runtime owns the call counter and
  * the collection sink — domain functions just push nodes into it.
  *
- * `collect(node, parent?)` is the single attach point:
- *   - parent provided → attach to parent.children (construction-time mutation)
- *   - parent absent → push as a top-level node
+ * Two attach paths:
+ *   - `collect(node, parent?)` runs when the node is created. With a
+ *     parent it attaches directly to `parent.children`; without one it
+ *     registers as top-level. Sets `parentId` accordingly.
+ *   - `adopt(parent, child)` re-parents an existing top-level node. Used
+ *     by `api.cabinet({ children: [api.shelf(...)] })`: the inner shelf
+ *     evaluates first (top-level), then the cabinet adopts it from there.
+ *     Throws if the child is already adopted (single-parent invariant).
  */
 export interface DomainContext {
   readonly core: CoreAPI;
   nextCall(): number;
   collect(node: SceneNode, parent?: SceneNode): SceneNode;
+  adopt(parent: SceneNode, child: SceneNode): void;
   /**
    * Source range of the `api.X(...)` call currently being evaluated, if the
    * source was instrumented. `null` when running uninstrumented source
@@ -46,13 +50,6 @@ export interface CabinetAPI {
 
 export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
   const { core } = ctx;
-
-  function expectCabinetParent(parent: SceneNode, callerName: string): CabinetParams {
-    if (parent.type !== 'cabinet') {
-      throw new Error(`api.${callerName}({ in: ... }) expects a cabinet, got '${parent.type}'`);
-    }
-    return parent.params;
-  }
 
   // Internal helper: emits one panel solid + the corresponding panel SceneNode.
   // Frame panels share their parent cabinet's sourceRange — they came from
@@ -79,6 +76,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       },
       solids: [solid],
       children: [],
+      parentId: null,
     };
     ctx.collect(node, parent);
   }
@@ -101,6 +99,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         params,
         solids: [],   // cabinet itself owns no solid; its frame is its children
         children: [],
+        parentId: null,
       };
       ctx.collect(node);
 
@@ -111,6 +110,13 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       buildPanelChild(node, [w, t, d],          [px, py + h - t / 2, pz],                              idx, 'top',    sourceRange);
       buildPanelChild(node, [w, t, d],          [px, py + t / 2, pz],                                  idx, 'bottom', sourceRange);
       buildPanelChild(node, [w, h, t],          [px, py + h / 2, pz - d / 2 + t / 2],                  idx, 'back',   sourceRange);
+
+      // Adopt explicitly-nested children. These ran first (arguments evaluate
+      // left-to-right), registered as top-level, and now get re-parented.
+      // Position math is unchanged in PR-A — see CabinetInput.children doc.
+      for (const child of input.children ?? []) {
+        ctx.adopt(node, child);
+      }
 
       return node;
     },
@@ -130,6 +136,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         params: input,
         solids: [solid],
         children: [],
+        parentId: null,
       };
       return ctx.collect(node);
     },
@@ -137,34 +144,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
     shelf(input) {
       const idx = ctx.nextCall();
       const sourceRange = currentRange();
-      const cab = expectCabinetParent(input.in, 'shelf');
-      const inset = input.inset ?? 0;
-      const [px, py, pz] = cab.position;
-
-      // Interior dimensions (frame thickness on each side).
-      const interiorW = cab.width - 2 * cab.thickness;
-      const interiorD = cab.depth - cab.thickness;        // back panel only
-      const shelfDepth = interiorD - inset;
-      const shelfWidth = interiorW;
-
-      const centre: Vec3 = [
-        px,
-        py + input.y,                                     // y is height above floor
-        pz + cab.thickness / 2 - inset / 2,               // sit against back unless inset
-      ];
-
-      const solid = core.box({
-        size: [shelfWidth, cab.thickness, shelfDepth],
-        transform: { translation: centre },
-      });
-
-      const params: ShelfParams = {
-        width: shelfWidth,
-        depth: shelfDepth,
-        thickness: cab.thickness,
-        position: centre,
-      };
-
+      const { params, solid } = shelfGeometry(core, input);
       const node: SceneNode = {
         type: 'shelf',
         id: `shelf#${idx}`,
@@ -173,50 +153,16 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         params,
         solids: [solid],
         children: [],
+        parentId: null,
+        adoptionInput: input,
       };
-      return ctx.collect(node, input.in);
+      return ctx.collect(node);
     },
 
     door(input) {
       const idx = ctx.nextCall();
       const sourceRange = currentRange();
-      const cab = expectCabinetParent(input.in, 'door');
-      const hinge: 'left' | 'right' = input.hinge ?? (input.side === 'right' ? 'right' : 'left');
-      const [px, py, pz] = cab.position;
-
-      const doorH = cab.height - 2 * cab.thickness - 2;   // 1mm clearance top/bottom
-      const doorY = py + cab.height / 2;
-      const doorZ = pz + cab.depth / 2 + cab.thickness / 2;
-
-      let doorW: number;
-      let doorX: number;
-      if (input.side === 'full') {
-        doorW = cab.width - 2;
-        doorX = px;
-      } else if (input.side === 'left') {
-        doorW = cab.width / 2 - 2;
-        doorX = px - cab.width / 4;
-      } else {
-        doorW = cab.width / 2 - 2;
-        doorX = px + cab.width / 4;
-      }
-
-      const centre: Vec3 = [doorX, doorY, doorZ];
-
-      const solid = core.box({
-        size: [doorW, doorH, cab.thickness],
-        transform: { translation: centre },
-      });
-
-      const params: DoorParams = {
-        width: doorW,
-        height: doorH,
-        thickness: cab.thickness,
-        position: centre,
-        hinge,
-        side: input.side,
-      };
-
+      const { params, solid } = doorGeometry(core, input);
       const node: SceneNode = {
         type: 'door',
         id: `door#${idx}`,
@@ -225,36 +171,16 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         params,
         solids: [solid],
         children: [],
+        parentId: null,
+        adoptionInput: input,
       };
-      return ctx.collect(node, input.in);
+      return ctx.collect(node);
     },
 
     drawer(input) {
       const idx = ctx.nextCall();
       const sourceRange = currentRange();
-      const cab = expectCabinetParent(input.in, 'drawer');
-      const [px, py, pz] = cab.position;
-
-      const drawerW = cab.width - 2 * cab.thickness - 4;  // small clearance
-      const drawerD = cab.depth - cab.thickness;
-      const centre: Vec3 = [
-        px,
-        py + input.y + input.height / 2,
-        pz + cab.thickness / 2,
-      ];
-
-      const solid = core.box({
-        size: [drawerW, input.height, drawerD],
-        transform: { translation: centre },
-      });
-
-      const params: DrawerParams = {
-        width: drawerW,
-        height: input.height,
-        depth: drawerD,
-        position: centre,
-      };
-
+      const { params, solid } = drawerGeometry(core, input);
       const node: SceneNode = {
         type: 'drawer',
         id: `drawer#${idx}`,
@@ -263,8 +189,10 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         params,
         solids: [solid],
         children: [],
+        parentId: null,
+        adoptionInput: input,
       };
-      return ctx.collect(node, input.in);
+      return ctx.collect(node);
     },
   };
 }

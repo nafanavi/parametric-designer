@@ -17,9 +17,13 @@ function walkAll(nodes: readonly SceneNode[]): SceneNode[] {
 describe('sourceRange threading through the runtime', () => {
   it('attaches sourceRange to every cabinet/shelf/door created via api.X', () => {
     const source = `
-const cab = api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18 });
-api.shelf({ in: cab, y: 600 });
-api.door({ in: cab, side: 'left' });
+api.cabinet({
+  width: 800, height: 1800, depth: 400, thickness: 18,
+  children: [
+    api.shelf({ y: 600 }),
+    api.door({ side: 'left' }),
+  ],
+});
 `;
     const result = runModel(source);
     expect(result.error).toBeUndefined();
@@ -27,19 +31,19 @@ api.door({ in: cab, side: 'left' });
     const cab = result.nodes.find((n) => n.type === 'cabinet')!;
     expect(cab.sourceRange).toBeDefined();
     expect(source.slice(cab.sourceRange!.start, cab.sourceRange!.end)).toMatch(
-      /^api\.cabinet\(\{.*thickness: 18.*\}\)$/s,
+      /^api\.cabinet\(\{[\s\S]*children:[\s\S]*\}\)$/,
     );
 
     const shelf = walkAll(result.nodes).find((n) => n.type === 'shelf')!;
     expect(shelf.sourceRange).toBeDefined();
     expect(source.slice(shelf.sourceRange!.start, shelf.sourceRange!.end)).toBe(
-      "api.shelf({ in: cab, y: 600 })",
+      'api.shelf({ y: 600 })',
     );
 
     const door = walkAll(result.nodes).find((n) => n.type === 'door')!;
     expect(door.sourceRange).toBeDefined();
     expect(source.slice(door.sourceRange!.start, door.sourceRange!.end)).toBe(
-      "api.door({ in: cab, side: 'left' })",
+      "api.door({ side: 'left' })",
     );
   });
 
