@@ -2,6 +2,7 @@
 
 import { useMemo } from 'react';
 import * as THREE from 'three';
+import { Edges } from '@react-three/drei';
 import type { SolidSnapshot } from '@/core/types';
 
 interface Props {
@@ -18,6 +19,8 @@ const COLOR_BY_TYPE: Record<string, string> = {
   drawer: '#9a6a40',
   cabinet: '#c9a26a',
 };
+
+const SELECTION_OUTLINE = '#ff8a4c';
 
 export function SolidMesh({ snapshot, selected, nodeType, onSelect }: Props) {
   const geometry = useMemo(() => {
@@ -42,11 +45,12 @@ export function SolidMesh({ snapshot, selected, nodeType, onSelect }: Props) {
       castShadow
       receiveShadow
     >
-      <meshStandardMaterial
-        color={selected ? '#ff8a4c' : baseColor}
-        roughness={0.6}
-        metalness={0.05}
-      />
+      <meshStandardMaterial color={baseColor} roughness={0.6} metalness={0.05} />
+      {/* Selection indicator: outline rendered as geometry edges; the part's
+          fill colour is left unchanged so a selected door still LOOKS like a
+          door, not a highlighted blob. Edges sit ~angle-threshold above the
+          coplanar surfaces so they show against any background. */}
+      {selected && <Edges color={SELECTION_OUTLINE} lineWidth={2} threshold={15} />}
     </mesh>
   );
 }

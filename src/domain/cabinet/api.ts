@@ -3,6 +3,7 @@ import type { SolidId, Vec3 } from '@/core/types';
 import type { SourceRange } from '@/model/ast/types';
 import type {
   CabinetInput,
+  CabinetNodeType,
   CabinetParams,
   DoorInput,
   DrawerInput,
@@ -48,6 +49,28 @@ export interface CabinetAPI {
   drawer(input: DrawerInput): SceneNode;
 }
 
+/**
+ * Build a stable node id. With a `sourceRange` (the runtime always sets one
+ * through `__withLoc` instrumentation), the id is anchored to the source
+ * byte offset of the originating `api.X(...)` call — so the id survives any
+ * mutation that doesn't move that call's start. The optional `label` keeps
+ * frame panels (which share their cabinet's `sourceRange`) unique within
+ * the cabinet (`panel@142:left`, `panel@142:right`, ...).
+ *
+ * Without a `sourceRange` (tests calling `createCabinetAPI(ctx)` directly,
+ * uninstrumented): fall back to the runtime counter so the id stays unique
+ * within the run — those flows just don't get stability across re-evaluations.
+ */
+function makeId(
+  type: CabinetNodeType,
+  range: SourceRange | undefined,
+  idx: number,
+  label?: string,
+): string {
+  if (range) return label ? `${type}@${range.start}:${label}` : `${type}@${range.start}`;
+  return label ? `${type}#${idx}:${label}` : `${type}#${idx}`;
+}
+
 export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
   const { core } = ctx;
 
@@ -65,7 +88,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
     const solid = core.box({ size, transform: { translation: centre } });
     const node: SceneNode = {
       type: 'panel',
-      id: `panel#${idx}-${label}`,
+      id: makeId('panel', sourceRange, idx, label),
       callIndex: idx,
       ...(sourceRange ? { sourceRange } : {}),
       params: {
@@ -93,7 +116,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
 
       const node: SceneNode = {
         type: 'cabinet',
-        id: `cabinet#${idx}`,
+        id: makeId('cabinet', sourceRange, idx),
         callIndex: idx,
         ...(sourceRange ? { sourceRange } : {}),
         params,
@@ -130,7 +153,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       });
       const node: SceneNode = {
         type: 'panel',
-        id: `panel#${idx}`,
+        id: makeId('panel', sourceRange, idx),
         callIndex: idx,
         ...(sourceRange ? { sourceRange } : {}),
         params: input,
@@ -147,7 +170,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       const { params, solid } = shelfGeometry(core, input);
       const node: SceneNode = {
         type: 'shelf',
-        id: `shelf#${idx}`,
+        id: makeId('shelf', sourceRange, idx),
         callIndex: idx,
         ...(sourceRange ? { sourceRange } : {}),
         params,
@@ -165,7 +188,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       const { params, solid } = doorGeometry(core, input);
       const node: SceneNode = {
         type: 'door',
-        id: `door#${idx}`,
+        id: makeId('door', sourceRange, idx),
         callIndex: idx,
         ...(sourceRange ? { sourceRange } : {}),
         params,
@@ -183,7 +206,7 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       const { params, solid } = drawerGeometry(core, input);
       const node: SceneNode = {
         type: 'drawer',
-        id: `drawer#${idx}`,
+        id: makeId('drawer', sourceRange, idx),
         callIndex: idx,
         ...(sourceRange ? { sourceRange } : {}),
         params,

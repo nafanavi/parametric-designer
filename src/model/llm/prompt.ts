@@ -83,13 +83,13 @@ they're relevant. Do not guess ids, positions, or which call to edit.
 PROTOCOL — examples of how to handle common requests:
 
 User: "make the selected shelf 50mm higher"
-  1. getSelection() -> e.g. { id: 'shelf#2', type: 'shelf', params: {...}, parentId: 'cabinet#1' }
+  1. getSelection() -> e.g. { id: 'shelf@218', type: 'shelf', params: {...}, parentId: 'cabinet@142' }
   2. Find the matching api.shelf({ y: <old> }) call in the cabinet's children array.
   3. Increase y by 50.
   4. Output new full source.
 
 User: "remove the selected door"
-  1. getSelection() -> e.g. { id: 'door#3', type: 'door', parentId: 'cabinet#1' }
+  1. getSelection() -> e.g. { id: 'door@260', type: 'door', parentId: 'cabinet@142' }
   2. Find the matching api.door({ side: ... }) entry inside the cabinet's
      \`children\` array and remove that array element (plus its trailing comma).
   3. Output new full source.

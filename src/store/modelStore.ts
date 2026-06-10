@@ -7,6 +7,11 @@ import { rewriteCallProperty, removeCallStatement } from '@/model/ast/rewrite';
 import { generateModel } from '@/model/llm';
 import { repairSource } from '@/model/repair';
 import { queryOf } from '@/model/scene/query';
+import {
+  computeEditDelta,
+  promoteToConceptualOwner,
+  reresolveSelection,
+} from '@/model/runtime/selection';
 import type { SourceEdit } from '@/domain/cabinet/actions';
 
 export interface PromptStatus {
@@ -61,6 +66,34 @@ const initialResult = runModel(EXAMPLE_MODEL_SOURCE);
 
 export const useModelStore = create<ModelState>((set, get) => {
   /**
+   * Single seam for swapping `result` (and `source`) on the store. Captures
+   * the previously-selected node BEFORE the swap, then re-resolves it
+   * against the new tree so a stable selection survives every commit path
+   * (param edits, action-button appends, debug-textarea edits, LLM
+   * regenerate, repair commits). `extra` overrides — e.g. `deleteSelection`
+   * passes `{ selection: null }` to defeat the re-resolve when the action's
+   * intent was to clear the selection.
+   *
+   * If `extra.source` is provided we diff old→new source and pass the edit
+   * range to the re-resolve. That lets a selection in cabinet B survive
+   * deleting a child of cabinet A: B's new start shifts by the deletion's
+   * size delta, and the matcher follows. Without a `source` change (e.g. a
+   * pure `selection` patch from a caller) the re-resolve falls back to the
+   * absolute-position match.
+   */
+  function commitResult(next: RunResult, extra: Partial<ModelState> = {}): void {
+    const state = get();
+    const prevNode = state.selection
+      ? queryOf(state.result).getNode(state.selection)
+      : null;
+    const delta = typeof extra.source === 'string'
+      ? computeEditDelta(state.source, extra.source)
+      : null;
+    const reresolved = reresolveSelection(prevNode, next, delta);
+    set({ selection: reresolved, ...extra, result: next });
+  }
+
+  /**
    * Single commit seam for mutating actions (delete, per-instance param edit,
    * future direct-manipulation). Pipeline:
    *
@@ -92,7 +125,7 @@ export const useModelStore = create<ModelState>((set, get) => {
 
     const result = runModel(proposed);
     if (!result.error) {
-      set({ source: proposed, result, ...onSuccess });
+      commitResult(result, { source: proposed, ...onSuccess });
       return;
     }
 
@@ -117,7 +150,7 @@ export const useModelStore = create<ModelState>((set, get) => {
       // clobbering the user's intermediate edit.
       if (get().source !== previous) return;
 
-      set({ source: repair.source, result: repairedRun, ...onSuccess });
+      commitResult(repairedRun, { source: repair.source, ...onSuccess });
     } finally {
       set({ isRepairing: false });
     }
@@ -137,8 +170,10 @@ export const useModelStore = create<ModelState>((set, get) => {
   setSource: (source) => {
     // Debug textarea path. We deliberately do NOT route through commitSource
     // here — the developer is editing source directly and any runtime error
-    // is intentional signal, not something to silently repair.
-    set({ source, result: runModel(source) });
+    // is intentional signal, not something to silently repair. We still go
+    // through commitResult so the selection re-resolves against the new
+    // tree instead of going stale.
+    commitResult(runModel(source), { source });
   },
 
   setSelectionParam: async (name, value) => {
@@ -165,7 +200,13 @@ export const useModelStore = create<ModelState>((set, get) => {
     // pinned and `onSuccess: { selection: null }` clears the right node
     // when the repair lands.
     if (get().isRepairing) return;
-    set({ selection: nodeId });
+    // Promote clicks on internal pieces (e.g. a frame panel of a cabinet —
+    // it shares the cabinet's sourceRange) up to the conceptual owner so
+    // the user lands on the part they actually meant to select.
+    const promoted = nodeId
+      ? promoteToConceptualOwner(nodeId, get().result)
+      : null;
+    set({ selection: promoted });
   },
 
   applyEdit: (edit) => {
@@ -176,7 +217,7 @@ export const useModelStore = create<ModelState>((set, get) => {
     } else if (edit.kind === 'replace') {
       next = source.split(edit.match).join(edit.with);
     }
-    set({ source: next, result: runModel(next) });
+    commitResult(runModel(next), { source: next });
   },
 
   togglePrompt: () => set((s) => ({ promptOpen: !s.promptOpen })),
@@ -198,9 +239,8 @@ export const useModelStore = create<ModelState>((set, get) => {
       const run = runModel(result.source);
       // Always update source so the user can hand-fix bad output; surface any
       // runtime error in the prompt status instead of falsely claiming success.
-      set({
+      commitResult(run, {
         source: result.source,
-        result: run,
         promptStatus: run.error
           ? { kind: 'error', message: `Generated source has a runtime error: ${run.error}` }
           : { kind: 'success', message: result.message },

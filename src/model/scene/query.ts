@@ -62,6 +62,12 @@ export class SceneQuery {
     return this.byId.get(id) ?? null;
   }
 
+  /** Every id in this run, in insertion (tree-walk) order. Used by the
+   *  store's selection re-resolve pass to find a node by sourceRange. */
+  allIds(): IterableIterator<string> {
+    return this.byId.keys();
+  }
+
   parent(id: string): string | null {
     return this.byId.get(id)?.parentId ?? null;
   }

@@ -39,7 +39,7 @@ export function buildSceneTools(query: SceneQuery, selectionId: string | null) {
     getNode: tool({
       description:
         'Returns the full summary (params, aabb, center, size, parentId) for one node by id.',
-      parameters: z.object({ id: z.string().describe('Node id, e.g. "panel#3" or "cabinet#1".') }),
+      parameters: z.object({ id: z.string().describe('Node id from listNodes/getSelection, e.g. "cabinet@142" or "panel@142:left". Treat as opaque; do not parse.') }),
       execute: async ({ id }) => query.summarize(id),
     }),
 
