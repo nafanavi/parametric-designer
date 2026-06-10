@@ -67,15 +67,17 @@ describe('runtime — modern JS in model source', () => {
     expect(result.nodes.filter((n) => n.type === 'cabinet')).toHaveLength(3);
   });
 
-  it('supports the compositional shelf/door API with `in:` references', () => {
+  it('supports the compositional shelf/door API via `children: [...]`', () => {
     const source = `
-      const cab = api.cabinet({
+      api.cabinet({
         width: 800, height: 1800, depth: 400, thickness: 18, position: [0, 0, 0],
+        children: [
+          api.shelf({ y: 600 }),
+          api.shelf({ y: 1200 }),
+          api.door({ side: 'left' }),
+          api.door({ side: 'right' }),
+        ],
       });
-      api.shelf({ in: cab, y: 600 });
-      api.shelf({ in: cab, y: 1200 });
-      api.door({ in: cab, side: 'left' });
-      api.door({ in: cab, side: 'right' });
     `;
 
     const result = runModel(source);
@@ -108,9 +110,15 @@ describe('runtime — modern JS in model source', () => {
     expect(result.nodes.filter((n) => n.type === 'cabinet')).toHaveLength(2);
   });
 
-  it('rejects shelf/door/drawer when `in:` is not a cabinet', () => {
-    const source = `api.shelf({ in: { type: 'panel', params: {} }, y: 100 });`;
+  it('a top-level shelf without a parent is registered free-floating', () => {
+    // The legacy `in:` rejection no longer applies — parenting is purely
+    // positional now (children array). A top-level api.shelf becomes a
+    // free-floating node; the kernel renders it at default size.
+    const source = `api.shelf({ y: 100 });`;
     const result = runModel(source);
-    expect(result.error).toMatch(/cabinet/);
+    expect(result.error).toBeUndefined();
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0].type).toBe('shelf');
+    expect(result.nodes[0].parentId).toBeNull();
   });
 });

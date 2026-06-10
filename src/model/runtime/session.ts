@@ -1,9 +1,66 @@
 import type { CoreAPI } from '@/core/api';
+import type { SolidId } from '@/core/types';
 import { createStubCore } from '@/core/stub';
 import { createCabinetAPI, type CabinetAPI, type DomainContext } from '@/domain/cabinet/api';
-import type { SceneNode } from '@/domain/cabinet/types';
+import {
+  shelfGeometry,
+  doorGeometry,
+  drawerGeometry,
+  type GeometryResult,
+} from '@/domain/cabinet/geometry';
+import type {
+  CabinetNode,
+  SceneNode,
+} from '@/domain/cabinet/types';
 import { instrumentApiCalls } from '@/model/ast/instrument';
 import type { SourceRange } from '@/model/ast/types';
+
+/**
+ * One narrow mutation seam for shelf/door/drawer geometry recompute during
+ * adoption. Encapsulates the writes through `readonly` SceneNode fields so
+ * the rest of `adopt()` reads as a typed dispatch.
+ */
+function applyGeometry<P>(
+  node: SceneNode & { params: P },
+  next: GeometryResult<P>,
+): void {
+  const mutable = node as { params: P; solids: readonly SolidId[] };
+  mutable.params = next.params;
+  mutable.solids = [next.solid];
+}
+
+/**
+ * Re-derives shelf/door/drawer geometry against a cabinet parent. Each
+ * `case` branch narrows `child` to its typed variant — `child.adoptionInput`
+ * is the per-type input (e.g. `ShelfInput`), no `as` casts needed inside.
+ * Nodes without a `adoptionInput` (panels, frame children, future verticals)
+ * pass through untouched.
+ */
+function recomputeChildGeometry(
+  core: CoreAPI,
+  parent: CabinetNode,
+  child: SceneNode,
+): void {
+  switch (child.type) {
+    case 'shelf':
+      if (child.adoptionInput) {
+        applyGeometry(child, shelfGeometry(core, child.adoptionInput, parent.params));
+      }
+      return;
+    case 'door':
+      if (child.adoptionInput) {
+        applyGeometry(child, doorGeometry(core, child.adoptionInput, parent.params));
+      }
+      return;
+    case 'drawer':
+      if (child.adoptionInput) {
+        applyGeometry(child, drawerGeometry(core, child.adoptionInput, parent.params));
+      }
+      return;
+    default:
+      return;
+  }
+}
 
 export interface ParamDef {
   readonly name: string;
@@ -66,6 +123,14 @@ export class ModelEvaluationSession {
         if (idx >= 0) this._nodes.splice(idx, 1);
         (parent.children as SceneNode[]).push(child);
         (child as { parentId: string | null }).parentId = parent.id;
+
+        // Re-derive geometry for shelf/door/drawer using the parent's params
+        // so the child sits inside the cabinet (interior width, depth, y
+        // relative to the cabinet floor) instead of in world coordinates.
+        // Other node types — panel children of api.cabinet, future custom
+        // verticals — carry no adoptionInput and pass through as-is.
+        if (parent.type !== 'cabinet') return;
+        recomputeChildGeometry(this._core, parent, child);
       },
       currentSourceRange: () => this._currentSourceRange,
     };

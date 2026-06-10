@@ -23,8 +23,8 @@ describe('instrumentApiCalls', () => {
 
   it('wraps every api.X call, leaving non-api calls untouched', () => {
     const src =
-      `const cab = api.cabinet({ width: 800 });\n` +
-      `api.shelf({ in: cab, y: 600 });\n` +
+      `api.cabinet({ width: 800 });\n` +
+      `api.shelf({ y: 600 });\n` +
       `unrelated();\n`;
     const out = instrumentApiCalls(src);
     expect(out).toContain('__withLoc');
@@ -59,9 +59,13 @@ describe('instrumentApiCalls', () => {
 
   it('produces source that parses again', () => {
     const src = `
-      const cab = api.cabinet({ width: 800 });
-      api.shelf({ in: cab, y: 600 });
-      api.door({ in: cab, side: 'left' });
+      api.cabinet({
+        width: 800,
+        children: [
+          api.shelf({ y: 600 }),
+          api.door({ side: 'left' }),
+        ],
+      });
     `;
     const out = instrumentApiCalls(src);
     // The instrumented output must be valid JS — sanity check via new Function.

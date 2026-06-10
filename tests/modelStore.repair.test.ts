@@ -37,12 +37,11 @@ api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [10
 api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [2000, 0, 0] });
 `;
 
-// One cabinet stored as `a`, with a shelf and door referencing `a`. Deleting
-// the cabinet leaves the shelf/door referencing an undefined `a` — runtime
-// error — which is exactly what should trigger the silent repair path.
+// Two cabinets where the second reads a property of the first. Deleting the
+// first leaves `a.params.width` undefined — runtime error — which is exactly
+// what should trigger the silent repair path (case A: property reference).
 const REFERENCING_CABINET = `const a = api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [0, 0, 0] });
-api.shelf({ in: a, y: 600 });
-api.door({ in: a, side: 'left' });
+api.cabinet({ width: a.params.width, height: 1800, depth: 400, thickness: 18, position: [1000, 0, 0] });
 `;
 
 describe('modelStore — silent repair pipeline', () => {
@@ -81,11 +80,12 @@ describe('modelStore — silent repair pipeline', () => {
     it('commits the repaired source when the LLM returns a clean fix', async () => {
       resetStore(REFERENCING_CABINET);
       const cabinets = RESULT().nodes.filter((n) => n.type === 'cabinet');
-      expect(cabinets).toHaveLength(1);
+      expect(cabinets).toHaveLength(2);
       useModelStore.getState().select(cabinets[0].id);
 
-      // Simulate the LLM removing the dependent shelf/door lines too.
-      const repaired = `// auto-repaired\n`;
+      // Simulate the LLM substituting the literal width for the now-dangling
+      // `a.params.width` reference (case A in the repair prompt).
+      const repaired = `api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [1000, 0, 0] }); // auto-repaired\n`;
       repairMock.mockResolvedValueOnce({
         status: 'success',
         source: repaired,
@@ -98,8 +98,8 @@ describe('modelStore — silent repair pipeline', () => {
       expect(repairMock).toHaveBeenCalledTimes(1);
       const arg = repairMock.mock.calls[0][0];
       expect(arg.previous).toBe(REFERENCING_CABINET);
-      expect(arg.proposed).not.toContain('const a = api.cabinet'); // the cabinet line was removed
-      expect(arg.proposed).toContain('api.shelf'); // shelf line still there, hence the error
+      expect(arg.proposed).not.toContain('const a = api.cabinet'); // the binding was removed
+      expect(arg.proposed).toContain('a.params.width'); // dangling reference, hence the error
       expect(typeof arg.error).toBe('string');
       expect(arg.error.length).toBeGreaterThan(0);
 
@@ -107,7 +107,7 @@ describe('modelStore — silent repair pipeline', () => {
       expect(SOURCE()).toBe(repaired);
       expect(useModelStore.getState().selection).toBeNull();
       expect(RESULT().error).toBeUndefined();
-      expect(RESULT().nodes).toHaveLength(0);
+      expect(RESULT().nodes.filter((n) => n.type === 'cabinet')).toHaveLength(1);
     });
   });
 
@@ -155,7 +155,7 @@ describe('modelStore — silent repair pipeline', () => {
       // LLM returned something but it's still broken (still references `a`).
       repairMock.mockResolvedValueOnce({
         status: 'success',
-        source: `api.shelf({ in: a, y: 600 });\n`,
+        source: `api.cabinet({ width: a.params.width, height: 1800, depth: 400, thickness: 18, position: [1000, 0, 0] });\n`,
         message: 'ok',
       });
 
