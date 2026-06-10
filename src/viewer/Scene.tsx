@@ -5,6 +5,7 @@ import { OrbitControls, Grid, Environment, Html } from '@react-three/drei';
 import { useModelStore } from '@/store/modelStore';
 import { SolidMesh } from './SolidMesh';
 import { queryOf } from '@/model/scene/query';
+import { promoteToConceptualOwner } from '@/model/runtime/selection';
 import type { SceneNode } from '@/domain/cabinet/types';
 
 /** Flatten the scene tree to leaves (nodes that own their visible solids). */
@@ -75,7 +76,15 @@ export function Scene() {
               <SolidMesh
                 key={`${node.id}:${solidId}`}
                 snapshot={snap}
-                selected={selection === node.id}
+                // A leaf "is the selection" when its conceptual owner — the
+                // first ancestor with its own sourceRange — matches. Frame
+                // panels of a cabinet share the cabinet's range so they
+                // light up when the cabinet is selected; a nested shelf
+                // has its own range and only lights up when itself selected.
+                selected={
+                  selection !== null &&
+                  promoteToConceptualOwner(node.id, result) === selection
+                }
                 nodeType={node.type}
                 onSelect={() => select(node.id)}
               />
