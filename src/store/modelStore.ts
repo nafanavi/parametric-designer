@@ -45,7 +45,7 @@ interface ModelState {
    * commit may invoke a silent LLM repair pass when the edit produces source
    * that throws — see `commitSource`.
    */
-  setSelectionParam: (name: string, value: number) => Promise<void>;
+  setSelectionParam: (name: string, value: number | readonly number[]) => Promise<void>;
   /**
    * Removes the enclosing source statement of the currently-selected node,
    * then clears the selection. No-op when nothing is selected or the

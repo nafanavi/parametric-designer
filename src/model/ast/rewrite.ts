@@ -127,18 +127,21 @@ export function findCallProperties(source: string, callRange: SourceRange): Call
 
 /**
  * Per-instance rewrite. Replaces the property's value at `callRange` with a
- * plain numeric literal. Returns the source unchanged if the property isn't
- * found.
+ * plain numeric literal — or, when `value` is an array of numbers, with an
+ * `[a, b, c]` literal (the common case for `position: [x, y, z]` on
+ * cabinets and standalone panels). Returns the source unchanged if the
+ * property isn't found.
  */
 export function rewriteCallProperty(
   source: string,
   callRange: SourceRange,
   propertyName: string,
-  value: number,
+  value: number | readonly number[],
 ): string {
   const target = findCallProperties(source, callRange).find((p) => p.name === propertyName);
   if (!target) return source;
-  return source.slice(0, target.valueRange.start) + String(value) + source.slice(target.valueRange.end);
+  const literal = Array.isArray(value) ? `[${value.join(', ')}]` : String(value);
+  return source.slice(0, target.valueRange.start) + literal + source.slice(target.valueRange.end);
 }
 
 // ─── deletion ──────────────────────────────────────────────────────
