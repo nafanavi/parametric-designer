@@ -121,6 +121,12 @@ export interface ShelfInput {
   readonly y: number;
   /** Optional gap from the front edge. Defaults to 0. */
   readonly inset?: number;
+  /**
+   * Optional world position for top-level (un-adopted) use, e.g. when
+   * dropped from the catalog. Ignored once the node is adopted by a
+   * cabinet — adoption recomputes geometry against the parent's interior.
+   */
+  readonly position?: Vec3;
 }
 
 export interface DoorInput {
@@ -128,6 +134,11 @@ export interface DoorInput {
   readonly side: 'left' | 'right' | 'full';
   /** Optional hinge override; defaults to `side === 'right' ? 'right' : 'left'`. */
   readonly hinge?: 'left' | 'right';
+  /**
+   * Optional world position for top-level (un-adopted) use. Ignored when
+   * adopted by a cabinet.
+   */
+  readonly position?: Vec3;
 }
 
 export interface DrawerInput {
@@ -138,6 +149,11 @@ export interface DrawerInput {
   readonly y: number;
   /** Vertical span of the drawer. */
   readonly height: number;
+  /**
+   * Optional world position for top-level (un-adopted) use. Ignored when
+   * adopted by a cabinet.
+   */
+  readonly position?: Vec3;
 }
 
 export interface PanelInput {

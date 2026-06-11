@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
-import { OrbitControls, Grid, Environment, Html } from '@react-three/drei';
+import { OrbitControls, Grid, Environment, Html, Edges } from '@react-three/drei';
 import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useModelStore } from '@/store/modelStore';
@@ -14,6 +14,7 @@ import {
   projectDragToSource,
   type DragSpec,
 } from './dragController';
+import { CATALOG_ITEMS, dropCentre, type CatalogItem } from '@/editor/catalog';
 import type { SceneNode } from '@/domain/cabinet/types';
 
 const MM_PER_UNIT = 1000; // scene group is scaled 0.001 (mm → metres)
@@ -26,12 +27,20 @@ interface ActiveDrag {
   readonly anchorMm: THREE.Vector3;
 }
 
+const CATALOG_BY_ID: ReadonlyMap<string, CatalogItem> = new Map(
+  CATALOG_ITEMS.map((item) => [item.id, item]),
+);
+
 function SceneContents() {
   const result = useModelStore((s) => s.result);
   const selection = useModelStore((s) => s.selection);
   const isRepairing = useModelStore((s) => s.isRepairing);
   const select = useModelStore((s) => s.select);
   const setSelectionParam = useModelStore((s) => s.setSelectionParam);
+  const catalogDrag = useModelStore((s) => s.catalogDrag);
+  const setCatalogDragGhost = useModelStore((s) => s.setCatalogDragGhost);
+  const cancelCatalogDrag = useModelStore((s) => s.cancelCatalogDrag);
+  const applyEdit = useModelStore((s) => s.applyEdit);
 
   const { camera, raycaster, gl } = useThree();
   const orbitRef = useRef<OrbitControlsImpl | null>(null);
@@ -194,6 +203,9 @@ function SceneContents() {
     (e: ThreeEvent<PointerEvent>, leafId: string) => {
       e.stopPropagation();
       if (isRepairing) return;
+      // While a catalog drag is in flight, leaf clicks are ignored — the
+      // canvas pointerup commits the catalog drop instead of selecting.
+      if (useModelStore.getState().catalogDrag) return;
       const ownerId = promoteToConceptualOwner(leafId, result);
       // Unselected: this press is a SELECT, not a drag. (We still gate
       // through the store's `select` for the repair-time interlock.)
@@ -235,6 +247,103 @@ function SceneContents() {
       selection,
     ],
   );
+
+  // Catalog drag — armed by `<CatalogPanel>` setting `catalogDrag`. We
+  // install window-level pointer listeners only while a drag is active so
+  // they don't leak. The cursor's floor-plane projection becomes the ghost
+  // position (mm). On pointerup over the canvas we append a new top-level
+  // call; pointerup elsewhere (or ESC) cancels.
+  useEffect(() => {
+    if (!catalogDrag) return;
+
+    const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+    const projectToFloorMm = (clientX: number, clientY: number): THREE.Vector3 | null => {
+      const rect = gl.domElement.getBoundingClientRect();
+      const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+      const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
+      const hit = new THREE.Vector3();
+      if (!raycaster.ray.intersectPlane(floorPlane, hit)) return null;
+      return hit.multiplyScalar(MM_PER_UNIT);
+    };
+
+    const isOverCanvas = (e: PointerEvent): boolean => {
+      const rect = gl.domElement.getBoundingClientRect();
+      return (
+        e.clientX >= rect.left &&
+        e.clientX <= rect.right &&
+        e.clientY >= rect.top &&
+        e.clientY <= rect.bottom
+      );
+    };
+
+    const onMove = (e: PointerEvent) => {
+      if (!isOverCanvas(e)) {
+        // Hide the ghost while the cursor is outside the viewport.
+        if (useModelStore.getState().catalogDrag?.ghostMm)
+          setCatalogDragGhost(null);
+        return;
+      }
+      const mm = projectToFloorMm(e.clientX, e.clientY);
+      if (!mm) return;
+      setCatalogDragGhost([mm.x, 0, mm.z]);
+    };
+
+    const onUp = (e: PointerEvent) => {
+      const drag = useModelStore.getState().catalogDrag;
+      if (!drag) return;
+      // Always tear down handlers; either commit or cancel below.
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('keydown', onKey);
+
+      const item = CATALOG_BY_ID.get(drag.itemId);
+      if (!item || !isOverCanvas(e)) {
+        cancelCatalogDrag();
+        return;
+      }
+      const mm = projectToFloorMm(e.clientX, e.clientY);
+      if (!mm) {
+        cancelCatalogDrag();
+        return;
+      }
+      const centre = dropCentre(item, mm.x, mm.z);
+      cancelCatalogDrag();
+      applyEdit({ kind: 'append', code: item.code(centre[0], centre[1], centre[2]) });
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('keydown', onKey);
+      cancelCatalogDrag();
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      window.removeEventListener('keydown', onKey);
+    };
+    // We intentionally re-arm only when `catalogDrag` flips from null to
+    // non-null. The handlers read live values via `getState()`.
+  }, [
+    applyEdit,
+    camera,
+    cancelCatalogDrag,
+    catalogDrag,
+    gl.domElement,
+    raycaster,
+    setCatalogDragGhost,
+  ]);
 
   // Render mirrors the SceneNode tree: one `<group>` per node, recursing
   // through `children`. Three.js composes parent × child transforms via
@@ -304,6 +413,30 @@ function SceneContents() {
       {/* Model is authored in millimetres; scale down for a metres-based scene. */}
       <group scale={0.001}>
         {result.nodes.map((node) => renderNode(node))}
+        {catalogDrag?.ghostMm &&
+          (() => {
+            const item = CATALOG_BY_ID.get(catalogDrag.itemId);
+            if (!item) return null;
+            const [w, h, d] = item.defaultSize;
+            // The ghost sits ON the floor at the cursor's projected point —
+            // simpler to read than centering at the part's authoring origin.
+            // The actual emitted source uses `dropCentre(item, x, z)` to
+            // honour each anchor convention (floorPivot vs centreOnFloor).
+            const cx = catalogDrag.ghostMm[0];
+            const cz = catalogDrag.ghostMm[2];
+            return (
+              <mesh position={[cx, h / 2, cz]}>
+                <boxGeometry args={[w, h, d]} />
+                <meshStandardMaterial
+                  color="#ff8a4c"
+                  transparent
+                  opacity={0.18}
+                  depthWrite={false}
+                />
+                <Edges color="#ff8a4c" lineWidth={2} threshold={15} />
+              </mesh>
+            );
+          })()}
         {spinnerAnchor && (
           <Html position={spinnerAnchor} center zIndexRange={[100, 0]} style={{ pointerEvents: 'none' }}>
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-panel-2/95 border border-border shadow-lg whitespace-nowrap">

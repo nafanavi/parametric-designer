@@ -36,6 +36,18 @@ interface ModelState {
   promptStatus: PromptStatus;
   promptHeight: number;
 
+  /** Right-side catalog sidebar — open/close toggle. */
+  catalogOpen: boolean;
+  /**
+   * Catalog drag-in-progress. `null` when no item is being dragged from
+   * the catalog. While set, the viewport renders a 3D ghost at
+   * `ghostMm` and commits a new top-level call on canvas pointer-up.
+   */
+  catalogDrag: {
+    readonly itemId: string;
+    readonly ghostMm: readonly [number, number, number] | null;
+  } | null;
+
   setSource: (source: string) => void;
   /**
    * Per-instance edit: rewrites a property of the currently-selected node's
@@ -60,6 +72,15 @@ interface ModelState {
   setPromptOpen: (open: boolean) => void;
   setPromptHeight: (height: number) => void;
   submitPrompt: (text: string) => Promise<void>;
+
+  toggleCatalog: () => void;
+  setCatalogOpen: (open: boolean) => void;
+  /** Arm a catalog drag — the Scene takes over from here. */
+  startCatalogDrag: (itemId: string) => void;
+  /** Update the 3D ghost position (mm). Called during the drag. */
+  setCatalogDragGhost: (ghostMm: readonly [number, number, number] | null) => void;
+  /** End the catalog drag without committing anything (cursor left canvas, ESC, etc). */
+  cancelCatalogDrag: () => void;
 }
 
 const initialResult = runModel(EXAMPLE_MODEL_SOURCE);
@@ -167,6 +188,9 @@ export const useModelStore = create<ModelState>((set, get) => {
   promptStatus: { kind: 'idle' },
   promptHeight: 240,
 
+  catalogOpen: false,
+  catalogDrag: null,
+
   setSource: (source) => {
     // Debug textarea path. We deliberately do NOT route through commitSource
     // here — the developer is editing source directly and any runtime error
@@ -223,6 +247,21 @@ export const useModelStore = create<ModelState>((set, get) => {
   togglePrompt: () => set((s) => ({ promptOpen: !s.promptOpen })),
   setPromptOpen: (open) => set({ promptOpen: open }),
   setPromptHeight: (height) => set({ promptHeight: height }),
+
+  toggleCatalog: () => set((s) => ({ catalogOpen: !s.catalogOpen })),
+  setCatalogOpen: (open) => set({ catalogOpen: open }),
+  startCatalogDrag: (itemId) => {
+    // Don't arm a drag during a repair — the source is in flux and the
+    // commit on drop could race the repair commit.
+    if (get().isRepairing) return;
+    set({ catalogDrag: { itemId, ghostMm: null } });
+  },
+  setCatalogDragGhost: (ghostMm) => {
+    const cur = get().catalogDrag;
+    if (!cur) return;
+    set({ catalogDrag: { itemId: cur.itemId, ghostMm } });
+  },
+  cancelCatalogDrag: () => set({ catalogDrag: null }),
 
   submitPrompt: async (text) => {
     const trimmed = text.trim();

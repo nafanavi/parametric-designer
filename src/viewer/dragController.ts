@@ -79,7 +79,17 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
     }
     case 'shelf':
     case 'drawer': {
-      if (node.parentId === null) return NO_DRAG; // top-level: deferred
+      if (node.parentId === null) {
+        // Top-level (catalog drop or hand-authored standalone). The input
+        // type carries an optional `position`, so the part has world
+        // coordinates we can round-trip through source as an array literal.
+        return {
+          axes: { x: true, y: true, z: true },
+          yBounds: null,
+          write: { kind: 'positionArray', originalY: node.params.position[1] },
+          originalWorld: node.params.position,
+        };
+      }
       const parent = query.getNode(node.parentId);
       if (!parent || parent.type !== 'cabinet') return NO_DRAG;
       const cab = parent.params;
@@ -101,8 +111,17 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
         originalWorld: node.params.position,
       };
     }
-    case 'door':
+    case 'door': {
+      if (node.parentId === null) {
+        return {
+          axes: { x: true, y: true, z: true },
+          yBounds: null,
+          write: { kind: 'positionArray', originalY: node.params.position[1] },
+          originalWorld: node.params.position,
+        };
+      }
       return NO_DRAG;
+    }
   }
 }
 

@@ -84,10 +84,17 @@ describe('getDragSpec', () => {
     expect(spec!.write).toEqual({ kind: 'positionArray', originalY: 100 });
   });
 
-  it('top-level shelf/drawer are not draggable in v1 (no x/z in source)', () => {
-    const result = runModel(`api.shelf({ y: 600 });\napi.drawer({ y: 100, height: 200 });`);
+  it('top-level shelf/drawer/door are XYZ-draggable (they carry optional position)', () => {
+    const result = runModel(
+      `api.shelf({ y: 600, position: [50, 600, 100] });\n` +
+      `api.drawer({ y: 100, height: 200, position: [0, 200, 0] });\n` +
+      `api.door({ side: 'full', position: [10, 900, 20] });`,
+    );
     for (const n of result.nodes) {
-      expect(getDragSpec(n, queryOf(result))).toBeNull();
+      const spec = getDragSpec(n, queryOf(result));
+      expect(spec).not.toBeNull();
+      expect(spec!.axes).toEqual({ x: true, y: true, z: true });
+      expect(spec!.write.kind).toBe('positionArray');
     }
   });
 });
