@@ -154,6 +154,25 @@ describe('rewriteCallProperty', () => {
     const src = `api.cabinet({ width:`;
     expect(rewriteCallProperty(src, { start: 0, end: src.length }, 'width', 1200)).toBe(src);
   });
+
+  it('rewrites an array literal value when a number[] is passed', () => {
+    const src = `api.cabinet({ width: 800, position: [0, 0, 0] });`;
+    const range = firstApiCallRange(src);
+    expect(rewriteCallProperty(src, range, 'position', [100, 0, 200])).toBe(
+      `api.cabinet({ width: 800, position: [100, 0, 200] });`,
+    );
+  });
+
+  it('rewrites a non-array existing value (e.g. a `param()` call) with an array literal', () => {
+    // Pathological but valid: the property was a function call returning an
+    // array. The array rewrite still replaces just the value-range — the
+    // function call disappears, replaced by an inline literal.
+    const src = `api.cabinet({ position: param('xyz', [0, 0, 0]) });`;
+    const range = firstApiCallRange(src);
+    expect(rewriteCallProperty(src, range, 'position', [10, 20, 30])).toBe(
+      `api.cabinet({ position: [10, 20, 30] });`,
+    );
+  });
 });
 
 describe('findEnclosingStatement', () => {

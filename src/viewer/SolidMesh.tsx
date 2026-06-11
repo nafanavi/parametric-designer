@@ -3,13 +3,20 @@
 import { useMemo } from 'react';
 import * as THREE from 'three';
 import { Edges } from '@react-three/drei';
+import type { ThreeEvent } from '@react-three/fiber';
 import type { SolidSnapshot } from '@/core/types';
 
 interface Props {
   snapshot: SolidSnapshot;
   selected: boolean;
   nodeType: string;
-  onSelect: () => void;
+  /**
+   * Raw pointerdown from the mesh. The Scene decides what it means — a
+   * click on an unselected mesh selects it; a press on an already-selected
+   * mesh starts a drag (when the node is draggable). Bubbling is stopped
+   * by the Scene's handler.
+   */
+  onPointerDown: (e: ThreeEvent<PointerEvent>) => void;
 }
 
 const COLOR_BY_TYPE: Record<string, string> = {
@@ -22,7 +29,7 @@ const COLOR_BY_TYPE: Record<string, string> = {
 
 const SELECTION_OUTLINE = '#ff8a4c';
 
-export function SolidMesh({ snapshot, selected, nodeType, onSelect }: Props) {
+export function SolidMesh({ snapshot, selected, nodeType, onPointerDown }: Props) {
   const geometry = useMemo(() => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(snapshot.mesh.positions, 3));
@@ -38,10 +45,7 @@ export function SolidMesh({ snapshot, selected, nodeType, onSelect }: Props) {
     <mesh
       geometry={geometry}
       position={[tx, ty, tz]}
-      onPointerDown={(e) => {
-        e.stopPropagation();
-        onSelect();
-      }}
+      onPointerDown={onPointerDown}
       castShadow
       receiveShadow
     >
