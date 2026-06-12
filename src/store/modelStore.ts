@@ -279,12 +279,7 @@ export const useModelStore = create<ModelState>((set, get) => {
 
   applyEdit: (edit) => {
     const { source } = get();
-    let next = source;
-    if (edit.kind === 'append') {
-      next = source.replace(/\s*$/, '\n') + edit.code;
-    } else if (edit.kind === 'replace') {
-      next = source.split(edit.match).join(edit.with);
-    }
+    const next = source.replace(/\s*$/, '\n') + edit.code;
     commitResult(runModel(next), { source: next });
   },
 

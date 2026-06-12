@@ -193,19 +193,4 @@ api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [10
     expect(newSelNode!.parentId).toBe(RESULT().nodes[1].id);
   });
 
-  it('survives applyEdit when the selected node stays at the same start', () => {
-    resetStore(`api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [0, 0, 0] });\n`);
-    const cab = RESULT().nodes[0];
-    useModelStore.getState().select(cab.id);
-
-    useModelStore.getState().applyEdit({
-      kind: 'replace',
-      match: 'width: 800',
-      with: 'width: 900',
-    });
-
-    // The cabinet still starts at byte 0 — selection is invariant.
-    expect(SELECTION()).toBe(cab.id);
-    expect((RESULT().nodes[0] as { params: { width: number } }).params.width).toBe(900);
-  });
 });
