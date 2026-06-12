@@ -23,6 +23,11 @@ const addVec = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2
  */
 export function createStubCore(): CoreAPI {
   const ops = new Map<SolidId, StubOp>();
+  // Snapshots are pure functions of `SolidId` — once an op is recorded its
+  // inputs never mutate (the API only adds ops, never edits them). Caching
+  // by id collapses the per-render churn that otherwise allocates fresh
+  // mesh arrays on every `snapshot()` call.
+  const snapshotCache = new Map<SolidId, SolidSnapshot>();
   let counter = 0;
   const nextId = (): SolidId => `s${++counter}` as SolidId;
 
@@ -95,20 +100,25 @@ export function createStubCore(): CoreAPI {
       return id;
     },
     snapshot(id): SolidSnapshot {
+      const cached = snapshotCache.get(id);
+      if (cached) return cached;
       const size = resolveSize(id);
       const transform = resolveTransform(id);
-      return {
+      const snap: SolidSnapshot = {
         id,
         mesh: boxMesh(size),
         aabb: aabbFrom(size, transform),
         transform,
       };
+      snapshotCache.set(id, snap);
+      return snap;
     },
     list() {
       return Array.from(ops.keys());
     },
     reset() {
       ops.clear();
+      snapshotCache.clear();
       counter = 0;
     },
   };

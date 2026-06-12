@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { Edges } from '@react-three/drei';
 import type { ThreeEvent } from '@react-three/fiber';
@@ -45,6 +45,8 @@ export function SolidMesh({ snapshot, selected, dropTarget, nodeType, onPointerD
     g.computeVertexNormals();
     return g;
   }, [snapshot]);
+
+  useEffect(() => () => geometry.dispose(), [geometry]);
 
   const [tx, ty, tz] = snapshot.transform.translation;
   const baseColor = COLOR_BY_TYPE[nodeType] ?? '#c9a26a';
