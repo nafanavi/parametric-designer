@@ -7,12 +7,11 @@ Low-code platform for parametric 3D/2D modeling apps ("Vercel for 3D apps"). Ini
 - **Parametric model = TypeScript source** calling a DomainAPI built on a CoreAPI.
 - **CoreAPI** wraps a BREP kernel (target: ClassCAD; currently stub). Primitives + booleans + queries only — no domain knowledge.
 - **DomainAPI** is per-vertical (cabinets, windows, …). Returns typed `SceneNode`s for editor traceability.
-- **Action functions** return expression trees / `SourceEdit`s — UI buttons that mutate the source.
 - **Visual editor (Puck-style).** Selecting a 3D object retrieves the DomainAPI call stack that produced it and exposes every parameter at every level for editing.
 - **Direct manipulation in viewport.** Drag/resize/click writes back to source, never hidden state.
 - **3D containers (flexbox-style).** Children expose `min`/`max`/`preferred`; container resize reflows, child resize may push neighbours.
-- **Auto-generated React UI.** Property panels + action buttons derive from typed DomainAPI signatures and `param('name', default)` calls. Per-vertical overrides on top.
-- **Source is the only canonical state.** Every edit (slider, drag, action, LLM) round-trips through the source string. Enables Git history, undo/redo, branching, collab.
+- **Auto-generated React UI.** Property panels and catalog entries derive from typed DomainAPI signatures and `param('name', default)` calls. Per-vertical overrides on top.
+- **Source is the only canonical state.** Every edit (slider, drag, catalog drop, LLM) round-trips through the source string. Enables Git history, undo/redo, branching, collab.
 - **Functional, pure evaluation.** Same source → same scene; no clocks/randomness/IO. Underpins deterministic undo and server-side reconstruction.
 - **Authoring in millimetres.** Convert once at the viewer boundary.
 - **Performance is first-class.** Hundreds of cabinets / thousands of solids must stay responsive. Don't block memoization, incremental rebuilds, instancing, or server-side kernel offload.
@@ -46,7 +45,7 @@ When the user suggests an approach, **don't jump to coding**. First, as an indep
 
 - Source evaluated via `new Function(...)` — plain JS, not real TS. Upgrade: in-browser transpile (sucrase/swc).
 - Stub CoreAPI: every solid renders as a box; `union`/`subtract` collapse to first operand. Replace with ClassCAD preserving `CoreAPI`.
-- `SourceEdit.replace` is literal string substitution. True roundtripping needs TS AST — deferred.
+- AST rewrites via acorn cover property writes, `children:` array insert, and call deletion ([src/model/ast/rewrite.ts](src/model/ast/rewrite.ts)).
 
 ## Logs
 

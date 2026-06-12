@@ -58,7 +58,7 @@ function SceneContents() {
   const moveSelectionIntoCabinet = useModelStore((s) => s.moveSelectionIntoCabinet);
   const catalogDrag = useModelStore((s) => s.catalogDrag);
   const cancelCatalogDrag = useModelStore((s) => s.cancelCatalogDrag);
-  const applyEdit = useModelStore((s) => s.applyEdit);
+  const setSource = useModelStore((s) => s.setSource);
   const deleteSelection = useModelStore((s) => s.deleteSelection);
 
   const { camera, raycaster, gl } = useThree();
@@ -162,11 +162,13 @@ function SceneContents() {
       // exporting the helper.
       const y = item.dropAnchor === 'floorPivot' ? 0 : item.defaultSize[1] / 2;
       const code = item.code(cursorMm.x, y, cursorMm.z);
-      // commitResult (via applyEdit) re-resolves selection from the
-      // PREVIOUS selection — which isn't the new node. We need to find
-      // the new node ourselves after the commit lands.
-      applyEdit({ kind: 'append', code });
-      // After applyEdit the store has new result; find the most-recently-
+      // setSource re-resolves selection from the PREVIOUS selection —
+      // which isn't the new node. We find the new node ourselves after
+      // the commit lands.
+      const current = useModelStore.getState().source;
+      const next = current.replace(/\s*$/, '\n') + code;
+      setSource(next);
+      // After setSource the store has the new result; find the most-recently-
       // added top-level node of the matching type. It's the one with the
       // largest sourceRange.start.
       const newResult = useModelStore.getState().result;
@@ -201,7 +203,7 @@ function SceneContents() {
         offsetMm: [0, 0, 0],
       };
     },
-    [applyEdit, planeFor, select],
+    [setSource, planeFor, select],
   );
 
   /** Continuous pointermove during ANY active drag (catalog-armed OR scene). */

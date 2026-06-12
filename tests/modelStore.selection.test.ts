@@ -48,18 +48,18 @@ describe('selection survives commits', () => {
     expect(after[1].sourceRange?.start).toBe(middle.sourceRange?.start);
   });
 
-  it('survives an unrelated append (action button) — id of selected is unchanged', () => {
+  it('survives an unrelated catalog drop — id of selected is unchanged', () => {
     resetStore(THREE_CABINETS);
     const cabinets = RESULT().nodes.filter((n) => n.type === 'cabinet');
     const first = cabinets[0];
     useModelStore.getState().select(first.id);
 
-    // Append a new cabinet AFTER the existing ones. The first cabinet's
+    // Drop a new cabinet AFTER the existing ones. The first cabinet's
     // sourceRange.start is at byte 0 and stays put — selection is invariant.
-    useModelStore.getState().applyEdit({
-      kind: 'append',
-      code: `api.cabinet({ width: 600, height: 1800, depth: 400, thickness: 18, position: [3000, 0, 0] });\n`,
-    });
+    const current = useModelStore.getState().source;
+    const next = current.replace(/\s*$/, '\n') +
+      `api.cabinet({ width: 600, height: 1800, depth: 400, thickness: 18, position: [3000, 0, 0] });\n`;
+    useModelStore.getState().setSource(next);
 
     expect(SELECTION()).toBe(first.id);
     expect(RESULT().nodes.filter((n) => n.type === 'cabinet')).toHaveLength(4);

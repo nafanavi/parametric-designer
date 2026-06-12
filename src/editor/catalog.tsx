@@ -8,9 +8,9 @@
  *   2. Its default size in millimetres — used by the drag ghost so the
  *      user sees the part at real-scale before releasing.
  *   3. How to emit a snippet of source code, given a drop world position
- *      in millimetres. The snippet is appended via the existing
- *      `applyEdit({ kind: 'append', code })` path so the new node lands as
- *      a top-level call with `position: [x, y, z]`.
+ *      in millimetres. The viewport appends the snippet to the current
+ *      source and commits via `setSource`, so the new node lands as a
+ *      top-level call with `position: [x, y, z]`.
  *
  * The `code` callback returns the FULL statement to append, ending with
  * a newline so subsequent appends don't pile onto the same line.

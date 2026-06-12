@@ -16,7 +16,6 @@ import {
   computeEditDelta,
   reresolveSelection,
 } from '@/model/runtime/selection';
-import type { SourceEdit } from '@/domain/cabinet/actions';
 
 export interface PromptStatus {
   readonly kind: 'idle' | 'pending' | 'success' | 'unavailable' | 'error';
@@ -68,7 +67,6 @@ interface ModelState {
    */
   deleteSelection: () => Promise<void>;
   select: (nodeId: string | null) => void;
-  applyEdit: (edit: SourceEdit) => void;
 
   /**
    * Adoption commit: move the currently-selected top-level part into a
@@ -275,12 +273,6 @@ export const useModelStore = create<ModelState>((set, get) => {
     // tools) need to set selection directly without rewriting their id.
     if (get().isRepairing) return;
     set({ selection: nodeId });
-  },
-
-  applyEdit: (edit) => {
-    const { source } = get();
-    const next = source.replace(/\s*$/, '\n') + edit.code;
-    commitResult(runModel(next), { source: next });
   },
 
   togglePrompt: () => set((s) => ({ promptOpen: !s.promptOpen })),

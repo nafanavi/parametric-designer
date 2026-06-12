@@ -4,7 +4,6 @@ Each vertical (cabinets, windows, kitchens, decks…) lives under `src/domain/<a
 
 - `types.ts` — `SceneNode` variants and `*Params` interfaces.
 - `api.ts` — pure factory that takes a `DomainContext` and returns the per-vertical API.
-- `actions.ts` — UI-facing action functions returning `SourceEdit`s.
 
 Reference implementation: [src/domain/cabinet/](../src/domain/cabinet/).
 
@@ -19,11 +18,11 @@ Every function on a DomainAPI:
 
 ```ts
 function panel(params) {
-  const idx = ctx.nextCall();
+  const idx = ctx.nextCall()
   const solid = core.box({
     size: [params.width, params.height, params.thickness],
     transform: { translation: params.position },
-  });
+  })
   return ctx.collect({
     type: 'panel',
     id: `panel#${idx}`,
@@ -31,7 +30,7 @@ function panel(params) {
     params,
     solids: [solid],
     children: [],
-  });
+  })
 }
 ```
 
@@ -39,24 +38,8 @@ function panel(params) {
 
 - **Container nodes** (e.g. `cabinet`) have children and may aggregate `solids` for selection convenience. The viewer renders **leaves only** — don't double-paint.
 - **Leaf nodes** own one or more `solids` directly and have `children: []`.
-- `id` must be stable across re-runs *given the same source and params*. Use `${type}#${callIndex}` plus a per-child disambiguator if the call produces multiple leaves.
+- `id` must be stable across re-runs _given the same source and params_. Use `${type}#${callIndex}` plus a per-child disambiguator if the call produces multiple leaves.
 - `params` is the source of truth for the PropertyPanel. Put **all** values that should be editable here, even computed ones — the panel currently shows it read-only, but the AST-edit upgrade will use this object verbatim.
-
-## Action functions
-
-Actions are pure: they return `SourceEdit`s, never apply them themselves. The editor decides when and how to apply.
-
-```ts
-{
-  id: 'add-cabinet',
-  label: 'Add Cabinet',
-  group: 'create',
-  run: () => ({
-    kind: 'append',
-    code: `api.cabinet({ width: param('w2', 600), ... });\n`,
-  }),
-}
-```
 
 Guidelines:
 
@@ -83,4 +66,4 @@ Common primitives (boards, joints, hardware) will eventually live in a shared `s
 - ❌ Calling Three.js from inside DomainAPI. Geometry only flows out via CoreAPI → snapshot → viewer.
 - ❌ Hard-coding `param()` keys to fixed names across calls — two cabinets would share a width input.
 - ❌ Hiding parameters from the `params` field "because they're computed". The PropertyPanel and (future) AST writeback both rely on `params` being complete.
-- ❌ Embedding UI text (`label`, `tooltip`) inside `SceneNode`. Keep UI metadata in the Action functions and PropertyPanel, not in the geometry tree.
+- ❌ Embedding UI text (`label`, `tooltip`) inside `SceneNode`. Keep UI metadata in and PropertyPanel, not in the geometry tree.
