@@ -10,10 +10,16 @@ import { SolidMesh } from './SolidMesh';
 import { queryOf } from '@/model/scene/query';
 import { promoteToConceptualOwner } from '@/model/runtime/selection';
 import {
+  findCabinetUnderCursor,
   getDragSpec,
   projectDragToSource,
+  snapToCabinetInterior,
   type DragSpec,
 } from './dragController';
+import {
+  findChildrenArrayRange,
+  insertArrayElement,
+} from '@/model/ast/rewrite';
 import { CATALOG_ITEMS, dropCentre, type CatalogItem } from '@/editor/catalog';
 import type { SceneNode } from '@/domain/cabinet/types';
 
@@ -37,6 +43,7 @@ function SceneContents() {
   const isRepairing = useModelStore((s) => s.isRepairing);
   const select = useModelStore((s) => s.select);
   const setSelectionParam = useModelStore((s) => s.setSelectionParam);
+  const moveSelectionIntoCabinet = useModelStore((s) => s.moveSelectionIntoCabinet);
   const catalogDrag = useModelStore((s) => s.catalogDrag);
   const setCatalogDragGhost = useModelStore((s) => s.setCatalogDragGhost);
   const cancelCatalogDrag = useModelStore((s) => s.cancelCatalogDrag);
@@ -50,6 +57,11 @@ function SceneContents() {
   // offset goes through React state so the affected meshes re-render.
   const dragRef = useRef<ActiveDrag | null>(null);
   const [dragOffsetMm, setDragOffsetMm] = useState<readonly [number, number, number]>([0, 0, 0]);
+  // When the dragged part's cursor crosses a cabinet's footprint, this
+  // holds that cabinet's id — the renderer outlines it (drop-target hint)
+  // and the scene-drag offset snaps the part to the cabinet's interior.
+  // Set during scene drag AND catalog drag; null otherwise.
+  const [candidateParentId, setCandidateParentId] = useState<string | null>(null);
 
   const query = queryOf(result);
 
@@ -132,9 +144,42 @@ function SceneContents() {
         );
         next[1] = clampedLocalY - baseLocalY;
       }
+
+      // Adoption preview: only for free-floating drags (positionArray write)
+      // whose owner is an adoptable type. When the cursor lands inside a
+      // cabinet's XZ footprint, we override the visual offset so the part
+      // snaps to that cabinet's interior — matching what `adopt()` will do
+      // on commit. The same cabinet id gets highlighted by `renderNode`.
+      let candidateId: string | null = null;
+      if (drag.spec.write.kind === 'positionArray') {
+        const owner = query.getNode(drag.ownerId);
+        const adoptable =
+          owner?.type === 'shelf' || owner?.type === 'door' || owner?.type === 'drawer';
+        if (adoptable) {
+          const proposedX = drag.spec.originalWorld[0] + next[0];
+          const proposedY = drag.spec.originalWorld[1] + next[1];
+          const proposedZ = drag.spec.originalWorld[2] + next[2];
+          candidateId = findCabinetUnderCursor(
+            { nodes: result.nodes },
+            proposedX,
+            proposedZ,
+            drag.ownerId,
+          );
+          if (candidateId) {
+            const cab = query.getNode(candidateId);
+            if (cab && cab.type === 'cabinet') {
+              const snapped = snapToCabinetInterior(cab, proposedY);
+              next[0] = snapped[0] - drag.spec.originalWorld[0];
+              next[1] = snapped[1] - drag.spec.originalWorld[1];
+              next[2] = snapped[2] - drag.spec.originalWorld[2];
+            }
+          }
+        }
+      }
+      setCandidateParentId(candidateId);
       setDragOffsetMm(next);
     },
-    [ndcOf, planeHitMm],
+    [ndcOf, planeHitMm, query, result.nodes],
   );
 
   const onWindowUp = useCallback(
@@ -157,6 +202,7 @@ function SceneContents() {
       // pointer position to avoid race-with-state.
       if (!drag) {
         setDragOffsetMm([0, 0, 0]);
+        setCandidateParentId(null);
         return;
       }
       const [ndcX, ndcY] = ndcOf(e);
@@ -179,15 +225,52 @@ function SceneContents() {
       if (same) {
         // No movement — treat as a click that confirmed the existing selection.
         setDragOffsetMm([0, 0, 0]);
+        setCandidateParentId(null);
         return;
       }
-      const write = projectDragToSource(drag.spec, proposed);
-      // Clear the transient before committing so the new source positions
-      // aren't double-counted in the next render.
+      // Adoption commit: if a candidate cabinet was highlighted at release,
+      // route through `moveSelectionIntoCabinet` (combined remove + insert
+      // → single commit, selection re-resolves to the adopted node).
+      // Otherwise fall through to the free-position commit.
+      const dropParentId = candidateParentId;
+      const owner = query.getNode(drag.ownerId);
+      const adoptable =
+        drag.spec.write.kind === 'positionArray' &&
+        (owner?.type === 'shelf' || owner?.type === 'door' || owner?.type === 'drawer');
       setDragOffsetMm([0, 0, 0]);
+      setCandidateParentId(null);
+      if (dropParentId && adoptable && owner) {
+        const cab = query.getNode(dropParentId);
+        const cabRelY = cab && cab.type === 'cabinet'
+          ? Math.max(
+              cab.params.thickness + cab.params.thickness / 2,
+              Math.min(
+                cab.params.height - cab.params.thickness - cab.params.thickness / 2,
+                proposed[1] - cab.params.position[1],
+              ),
+            )
+          : 0;
+        // Build the child snippet from the catalog's `childCode` so the
+        // adopted call matches what a catalog drop would emit.
+        const catalogItem = CATALOG_ITEMS.find((c) => c.nodeType === owner.type);
+        if (catalogItem?.childCode) {
+          void moveSelectionIntoCabinet(dropParentId, catalogItem.childCode(cabRelY));
+          return;
+        }
+      }
+      const write = projectDragToSource(drag.spec, proposed);
       void setSelectionParam(write.name, write.value);
     },
-    [gl.domElement, ndcOf, onWindowMove, planeHitMm, setSelectionParam],
+    [
+      candidateParentId,
+      gl.domElement,
+      moveSelectionIntoCabinet,
+      ndcOf,
+      onWindowMove,
+      planeHitMm,
+      query,
+      setSelectionParam,
+    ],
   );
 
   // Cleanup any stray listeners on unmount.
@@ -283,10 +366,30 @@ function SceneContents() {
         // Hide the ghost while the cursor is outside the viewport.
         if (useModelStore.getState().catalogDrag?.ghostMm)
           setCatalogDragGhost(null);
+        setCandidateParentId(null);
         return;
       }
       const mm = projectToFloorMm(e.clientX, e.clientY);
       if (!mm) return;
+      // Adoption hit-test for the catalog drag: only items whose
+      // `childCode` is non-null are adoptable (shelf/door/drawer).
+      const drag = useModelStore.getState().catalogDrag;
+      const item = drag ? CATALOG_BY_ID.get(drag.itemId) : null;
+      const adoptable = !!item?.childCode;
+      const candidate = adoptable
+        ? findCabinetUnderCursor({ nodes: result.nodes }, mm.x, mm.z)
+        : null;
+      setCandidateParentId(candidate);
+      // While over a cabinet, snap the ghost to the cabinet's interior
+      // centre so the user sees the part already inside before releasing.
+      if (candidate) {
+        const cab = query.getNode(candidate);
+        if (cab && cab.type === 'cabinet' && item) {
+          const interior = snapToCabinetInterior(cab, item.defaultSize[1] / 2 + cab.params.position[1]);
+          setCatalogDragGhost([interior[0], 0, interior[2]]);
+          return;
+        }
+      }
       setCatalogDragGhost([mm.x, 0, mm.z]);
     };
 
@@ -298,6 +401,10 @@ function SceneContents() {
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       window.removeEventListener('keydown', onKey);
+      // Snapshot then clear the candidate before any commit so a stale
+      // highlight doesn't linger past adoption.
+      const dropParentId = candidateParentId;
+      setCandidateParentId(null);
 
       const item = CATALOG_BY_ID.get(drag.itemId);
       if (!item || !isOverCanvas(e)) {
@@ -309,6 +416,40 @@ function SceneContents() {
         cancelCatalogDrag();
         return;
       }
+
+      // Adoption path: drop landed inside a cabinet AND the item is
+      // adoptable. Emit a child entry into the cabinet's `children: [...]`
+      // via the same AST helpers `moveSelectionIntoCabinet` uses, then
+      // select the new node.
+      if (dropParentId && item.childCode) {
+        const cab = query.getNode(dropParentId);
+        if (cab && cab.type === 'cabinet') {
+          const halfT = cab.params.thickness / 2;
+          const interiorYMin = cab.params.thickness + halfT;
+          const interiorYMax = cab.params.height - cab.params.thickness - halfT;
+          // The cursor's y is 0 (floor projection); for catalog drops we
+          // pick a sensible mid-cabinet y based on the item's default
+          // height so the part lands somewhere visible. The user can drag
+          // it after to fine-tune.
+          const desiredCabRelY = item.defaultSize[1] / 2;
+          const cabRelY = Math.max(interiorYMin, Math.min(interiorYMax, desiredCabRelY));
+          const currentSource = useModelStore.getState().source;
+          const arrayRange = findChildrenArrayRange(currentSource, cab.sourceRange!);
+          if (arrayRange) {
+            const newSource = insertArrayElement(
+              currentSource,
+              arrayRange,
+              item.childCode(cabRelY),
+            );
+            cancelCatalogDrag();
+            useModelStore.getState().setSource(newSource);
+            return;
+          }
+          // Fall through to top-level append if the cabinet has no
+          // children array literal in source.
+        }
+      }
+
       const centre = dropCentre(item, mm.x, mm.z);
       cancelCatalogDrag();
       applyEdit({ kind: 'append', code: item.code(centre[0], centre[1], centre[2]) });
@@ -339,9 +480,12 @@ function SceneContents() {
     applyEdit,
     camera,
     cancelCatalogDrag,
+    candidateParentId,
     catalogDrag,
     gl.domElement,
+    query,
     raycaster,
+    result.nodes,
     setCatalogDragGhost,
   ]);
 
@@ -360,6 +504,12 @@ function SceneContents() {
       : [0, 0, 0];
     const owner = promoteToConceptualOwner(node.id, result);
     const isSelected = selection !== null && owner === selection;
+    // Drop-target highlight: when a drag is hovering over a cabinet, its
+    // frame panels (which share the cabinet's range and thus its owner-id)
+    // are tinted teal so the user sees "I'll drop into THIS cabinet."
+    // Distinct from selection's orange so the two cues don't collide
+    // when the cabinet is also the current selection.
+    const isDropTarget = candidateParentId !== null && owner === candidateParentId;
     return (
       <group key={node.id} position={groupPos}>
         {node.solids.map((solidId) => {
@@ -369,6 +519,7 @@ function SceneContents() {
               key={`${node.id}:${solidId}`}
               snapshot={snap}
               selected={isSelected}
+              dropTarget={isDropTarget}
               nodeType={node.type}
               onPointerDown={(e) => onLeafPointerDown(e, node.id)}
             />

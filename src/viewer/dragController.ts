@@ -125,6 +125,55 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
   }
 }
 
+/**
+ * Find the top-level cabinet whose XZ footprint contains `(worldX, worldZ)`
+ * (millimetres). Returns the cabinet's id, or null when the cursor is
+ * outside every cabinet. Used to decide adoption during a drag-from-catalog
+ * or scene-drag of a free-floating part.
+ *
+ * `excludeId` skips a specific node — useful when the dragged part itself
+ * is a top-level shelf that overlaps a cabinet but isn't a candidate parent
+ * for itself.
+ */
+export function findCabinetUnderCursor(
+  result: { readonly nodes: readonly SceneNode[] },
+  worldX: number,
+  worldZ: number,
+  excludeId?: string,
+): string | null {
+  for (const node of result.nodes) {
+    if (node.type !== 'cabinet') continue;
+    if (excludeId && node.id === excludeId) continue;
+    const { position, width, depth } = node.params;
+    const minX = position[0] - width / 2;
+    const maxX = position[0] + width / 2;
+    const minZ = position[2] - depth / 2;
+    const maxZ = position[2] + depth / 2;
+    if (worldX >= minX && worldX <= maxX && worldZ >= minZ && worldZ <= maxZ) {
+      return node.id;
+    }
+  }
+  return null;
+}
+
+/**
+ * Snap a free-floating drag position to the interior of a cabinet — what
+ * the part will look like once adopted. Centres X/Z on the cabinet and
+ * clamps Y to the interior so the user sees the shelf sit inside the cabinet
+ * during the drag, matching what `adopt()` will compute on commit.
+ */
+export function snapToCabinetInterior(
+  cabinet: SceneNode & { type: 'cabinet' },
+  worldY: number,
+): readonly [number, number, number] {
+  const cab = cabinet.params;
+  const halfT = cab.thickness / 2;
+  const yMin = cab.position[1] + cab.thickness + halfT;
+  const yMax = cab.position[1] + cab.height - cab.thickness - halfT;
+  const clampedY = clamp(worldY, yMin, yMax);
+  return [cab.position[0], clampedY, cab.position[2]];
+}
+
 /** Clamps a value to `[min, max]`. Tiny utility kept here so tests can hit it. */
 export function clamp(value: number, min: number, max: number): number {
   if (value < min) return min;

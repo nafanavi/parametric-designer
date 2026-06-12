@@ -33,6 +33,14 @@ export interface CatalogItem {
   readonly dropAnchor: 'floorPivot' | 'centreOnFloor';
   /** Generate the source snippet to append for a drop at world (x, y, z) in mm. */
   readonly code: (x: number, y: number, z: number) => string;
+  /**
+   * Snippet to insert into a cabinet's `children: [...]` array when the
+   * drop landed on a cabinet (adoption path). Cabinet-floor-relative `y` —
+   * the cursor's world y minus the parent cabinet's floor y, clamped to
+   * the interior. Returns null for items that can't be adopted (cabinets,
+   * panels) — the drop falls back to the top-level `code` path.
+   */
+  readonly childCode: ((cabRelY: number) => string) | null;
   readonly Icon: ComponentType<SVGProps<SVGSVGElement>>;
 }
 
@@ -86,8 +94,11 @@ export const CATALOG_ITEMS: readonly CatalogItem[] = [
     nodeType: 'cabinet',
     defaultSize: [800, 1800, 400],
     dropAnchor: 'floorPivot',
+    // Empty `children: []` makes the cabinet immediately able to adopt the
+    // next dropped shelf/door/drawer — the AST helper just inserts into it.
     code: (x, y, z) =>
-      `api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [${round1(x)}, ${round1(y)}, ${round1(z)}] });\n`,
+      `api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [${round1(x)}, ${round1(y)}, ${round1(z)}], children: [] });\n`,
+    childCode: null, // cabinets aren't adoptable in v1
     Icon: CabinetIcon,
   },
   {
@@ -98,6 +109,7 @@ export const CATALOG_ITEMS: readonly CatalogItem[] = [
     dropAnchor: 'centreOnFloor',
     code: (x, y, z) =>
       `api.panel({ width: 600, height: 1200, thickness: 18, position: [${round1(x)}, ${round1(y)}, ${round1(z)}] });\n`,
+    childCode: null, // standalone panels don't have natural interior semantics in v1
     Icon: PanelIcon,
   },
   {
@@ -108,6 +120,7 @@ export const CATALOG_ITEMS: readonly CatalogItem[] = [
     dropAnchor: 'centreOnFloor',
     code: (x, y, z) =>
       `api.shelf({ y: ${round1(y)}, position: [${round1(x)}, ${round1(y)}, ${round1(z)}] });\n`,
+    childCode: (cabRelY) => `api.shelf({ y: ${round1(cabRelY)} })`,
     Icon: ShelfIcon,
   },
   {
@@ -118,6 +131,9 @@ export const CATALOG_ITEMS: readonly CatalogItem[] = [
     dropAnchor: 'centreOnFloor',
     code: (x, y, z) =>
       `api.door({ side: 'full', position: [${round1(x)}, ${round1(y)}, ${round1(z)}] });\n`,
+    // Doors don't carry a `y` field — `side` controls placement. Adoption
+    // just emits the side; the cabinet's frame geometry handles the rest.
+    childCode: () => `api.door({ side: 'full' })`,
     Icon: DoorIcon,
   },
   {
@@ -128,6 +144,7 @@ export const CATALOG_ITEMS: readonly CatalogItem[] = [
     dropAnchor: 'centreOnFloor',
     code: (x, y, z) =>
       `api.drawer({ y: ${round1(y)}, height: 200, position: [${round1(x)}, ${round1(y)}, ${round1(z)}] });\n`,
+    childCode: (cabRelY) => `api.drawer({ y: ${round1(cabRelY)}, height: 200 })`,
     Icon: DrawerIcon,
   },
 ];

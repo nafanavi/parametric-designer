@@ -3,7 +3,12 @@
 import { create } from 'zustand';
 import { EXAMPLE_MODEL_SOURCE } from '@/model/example';
 import { runModel, type ParamDef, type RunResult } from '@/model/runtime';
-import { rewriteCallProperty, removeCallStatement } from '@/model/ast/rewrite';
+import {
+  findChildrenArrayRange,
+  insertArrayElement,
+  removeCallStatement,
+  rewriteCallProperty,
+} from '@/model/ast/rewrite';
 import { generateModel } from '@/model/llm';
 import { repairSource } from '@/model/repair';
 import { queryOf } from '@/model/scene/query';
@@ -67,6 +72,22 @@ interface ModelState {
   deleteSelection: () => Promise<void>;
   select: (nodeId: string | null) => void;
   applyEdit: (edit: SourceEdit) => void;
+
+  /**
+   * Adoption commit: move the currently-selected top-level part into a
+   * target cabinet's `children: [...]` array. The source is rewritten in
+   * one commit — remove the part's original call, insert a child entry
+   * into the target cabinet — so the selection re-resolves cleanly to
+   * the adopted node afterwards. No-op when:
+   *   - nothing is selected,
+   *   - the selected node has no sourceRange,
+   *   - the target cabinet has no `children: [...]` array literal in source.
+   * `childCode` is the snippet to insert (without trailing comma).
+   */
+  moveSelectionIntoCabinet: (
+    targetCabinetId: string,
+    childCode: string,
+  ) => Promise<void>;
 
   togglePrompt: () => void;
   setPromptOpen: (open: boolean) => void;
@@ -216,6 +237,40 @@ export const useModelStore = create<ModelState>((set, get) => {
     if (!node?.sourceRange) return;
     const next = removeCallStatement(source, node.sourceRange);
     await commitSource(next, { selection: null });
+  },
+
+  moveSelectionIntoCabinet: async (targetCabinetId, childCode) => {
+    const { source, selection, result } = get();
+    if (!selection) return;
+    const q = queryOf(result);
+    const dragged = q.getNode(selection);
+    const target = q.getNode(targetCabinetId);
+    if (!dragged?.sourceRange || !target?.sourceRange) return;
+    if (target.type !== 'cabinet') return;
+    if (dragged.id === target.id) return;
+
+    // Locate the target cabinet's `children: [...]` array literal.
+    const arrayRange = findChildrenArrayRange(source, target.sourceRange);
+    if (!arrayRange) return; // cabinet has no `children` field — v1 doesn't synthesise one.
+
+    // Apply both edits in one new source string. The order is critical
+    // because byte offsets shift: do the rightmost edit first so the
+    // earlier offsets stay valid.
+    const draggedRange = dragged.sourceRange;
+    let next: string;
+    if (draggedRange.start > arrayRange.end) {
+      // Dragged call lives AFTER the cabinet's children array — remove
+      // it first (later offset), then insert into the still-correct array.
+      const afterRemove = removeCallStatement(source, draggedRange);
+      next = insertArrayElement(afterRemove, arrayRange, childCode);
+    } else {
+      // Dragged call lives BEFORE the array — insert first (offsets after
+      // the array shift, but `draggedRange` is BEFORE so it's still valid),
+      // then remove.
+      const afterInsert = insertArrayElement(source, arrayRange, childCode);
+      next = removeCallStatement(afterInsert, draggedRange);
+    }
+    await commitSource(next);
   },
 
   select: (nodeId) => {
