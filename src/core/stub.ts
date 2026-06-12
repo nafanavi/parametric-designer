@@ -1,20 +1,25 @@
 import type { CoreAPI, BoxParams } from './api';
-import type { AABB, SolidId, SolidSnapshot, Transform, TriangleMesh, Vec3 } from './types';
+import type { SolidId, SolidSnapshot, Transform, TriangleMesh, Vec3 } from './types';
+import {
+  IDENTITY_TRANSFORM,
+  compose,
+  fromMat4,
+  toMat4,
+  transformedAabb,
+} from './math/transform';
 
 type StubOp =
   | { kind: 'box'; size: Vec3; transform: Transform }
   | { kind: 'translate'; src: SolidId; delta: Vec3 }
+  | { kind: 'rotate'; src: SolidId; rotation: Vec3 }
+  | { kind: 'transform'; src: SolidId; transform: Transform }
   | { kind: 'union'; a: SolidId; b: SolidId }
   | { kind: 'subtract'; a: SolidId; b: SolidId };
 
-const ZERO: Vec3 = [0, 0, 0];
-
 const defaultTransform = (t?: Partial<Transform>): Transform => ({
-  translation: t?.translation ?? ZERO,
-  rotation: t?.rotation ?? ZERO,
+  translation: t?.translation ?? IDENTITY_TRANSFORM.translation,
+  rotation: t?.rotation ?? IDENTITY_TRANSFORM.rotation,
 });
-
-const addVec = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
 
 /**
  * In-memory BREP stand-in. The CoreAPI shape is what matters — the implementation
@@ -49,13 +54,38 @@ export function createStubCore(): CoreAPI {
     return { positions, indices, normals };
   };
 
+  /**
+   * Walk the op chain back to the leaf box, composing each layer's matrix.
+   * Returns the final Transform (decomposed from the composed Mat4) so
+   * callers can hand it to the viewer without knowing about Mat4 at all.
+   */
   const resolveTransform = (id: SolidId): Transform => {
     const op = ops.get(id);
     if (!op) throw new Error(`Unknown solid ${id}`);
     if (op.kind === 'box') return op.transform;
     if (op.kind === 'translate') {
       const inner = resolveTransform(op.src);
-      return { ...inner, translation: addVec(inner.translation, op.delta) };
+      return {
+        translation: [
+          inner.translation[0] + op.delta[0],
+          inner.translation[1] + op.delta[1],
+          inner.translation[2] + op.delta[2],
+        ],
+        rotation: inner.rotation,
+      };
+    }
+    if (op.kind === 'rotate') {
+      const inner = resolveTransform(op.src);
+      const composed = compose(
+        toMat4({ translation: [0, 0, 0], rotation: op.rotation }),
+        toMat4(inner),
+      );
+      return fromMat4(composed);
+    }
+    if (op.kind === 'transform') {
+      const inner = resolveTransform(op.src);
+      const composed = compose(toMat4(op.transform), toMat4(inner));
+      return fromMat4(composed);
     }
     // boolean ops collapse to leaf transform of `a` in the stub
     return resolveTransform(op.kind === 'union' ? op.a : op.a);
@@ -65,17 +95,10 @@ export function createStubCore(): CoreAPI {
     const op = ops.get(id);
     if (!op) throw new Error(`Unknown solid ${id}`);
     if (op.kind === 'box') return op.size;
-    if (op.kind === 'translate') return resolveSize(op.src);
+    if (op.kind === 'translate' || op.kind === 'rotate' || op.kind === 'transform') {
+      return resolveSize(op.src);
+    }
     return resolveSize(op.a);
-  };
-
-  const aabbFrom = (size: Vec3, t: Transform): AABB => {
-    const [tx, ty, tz] = t.translation;
-    const [hx, hy, hz] = [size[0] / 2, size[1] / 2, size[2] / 2];
-    return {
-      min: [tx - hx, ty - hy, tz - hz],
-      max: [tx + hx, ty + hy, tz + hz],
-    };
   };
 
   return {
@@ -87,6 +110,16 @@ export function createStubCore(): CoreAPI {
     translate(src, delta) {
       const id = nextId();
       ops.set(id, { kind: 'translate', src, delta });
+      return id;
+    },
+    rotate(src, rotation) {
+      const id = nextId();
+      ops.set(id, { kind: 'rotate', src, rotation });
+      return id;
+    },
+    transform(src, transform) {
+      const id = nextId();
+      ops.set(id, { kind: 'transform', src, transform });
       return id;
     },
     union(a, b) {
@@ -107,7 +140,7 @@ export function createStubCore(): CoreAPI {
       const snap: SolidSnapshot = {
         id,
         mesh: boxMesh(size),
-        aabb: aabbFrom(size, transform),
+        aabb: transformedAabb(size, transform),
         transform,
       };
       snapshotCache.set(id, snap);

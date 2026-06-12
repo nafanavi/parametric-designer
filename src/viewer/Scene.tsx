@@ -266,6 +266,7 @@ function SceneContents() {
           const rd = raycaster.ray.direction;
           const hit = findCabinetUnderRay(
             { nodes: result.nodes },
+            query,
             [ro.x * MM_PER_UNIT, ro.y * MM_PER_UNIT, ro.z * MM_PER_UNIT],
             [rd.x, rd.y, rd.z],
             drag.ownerId,
@@ -341,10 +342,18 @@ function SceneContents() {
           const halfT = cab.params.thickness / 2;
           const interiorYMin = cab.params.thickness + halfT;
           const interiorYMax = cab.params.height - cab.params.thickness - halfT;
-          const cabRelY = Math.max(
-            interiorYMin,
-            Math.min(interiorYMax, proposed[1] - cab.params.position[1]),
-          );
+          // For a rotated cabinet, world Y minus cabinet position Y isn't
+          // a cabinet-local y. Park the adopted child at mid-height for
+          // PR-1 — proper local-space drop math arrives with PR-2.
+          const [rx, ry, rz] = cab.params.rotation;
+          const cabIsRotated =
+            Math.abs(rx) > 1e-6 || Math.abs(ry) > 1e-6 || Math.abs(rz) > 1e-6;
+          const cabRelY = cabIsRotated
+            ? (interiorYMin + interiorYMax) / 2
+            : Math.max(
+                interiorYMin,
+                Math.min(interiorYMax, proposed[1] - cab.params.position[1]),
+              );
           const snippet = snippetForAdoption(owner, cabRelY);
           if (snippet) {
             void moveSelectionIntoCabinet(dropParentId, snippet);

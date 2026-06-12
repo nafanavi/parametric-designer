@@ -41,9 +41,10 @@ export interface SceneNodeBase<T extends CabinetNodeType, P, GI = undefined> {
 
 /**
  * Stored cabinet params — the resolved (post-default) values that the
- * SceneNode actually carries. `position` is required (defaults to [0,0,0]
- * are resolved at construction time). The cabinet is a frame only; its
- * shelves / doors / drawers live in its `children: [...]` field.
+ * SceneNode actually carries. `position` and `rotation` are required
+ * (defaults to [0,0,0] are resolved at construction time). The cabinet is
+ * a frame only; its shelves / doors / drawers live in its `children: [...]`
+ * field. `rotation` is intrinsic XYZ Euler in degrees.
  */
 export interface CabinetParams {
   readonly width: number;
@@ -51,6 +52,7 @@ export interface CabinetParams {
   readonly depth: number;
   readonly thickness: number;
   readonly position: Vec3;
+  readonly rotation: Vec3;
 }
 
 export interface PanelParams {
@@ -58,6 +60,7 @@ export interface PanelParams {
   readonly height: number;
   readonly thickness: number;
   readonly position: Vec3;
+  readonly rotation: Vec3;
 }
 
 export interface ShelfParams {
@@ -65,6 +68,7 @@ export interface ShelfParams {
   readonly depth: number;
   readonly thickness: number;
   readonly position: Vec3;
+  readonly rotation: Vec3;
 }
 
 export interface DoorParams {
@@ -72,6 +76,7 @@ export interface DoorParams {
   readonly height: number;
   readonly thickness: number;
   readonly position: Vec3;
+  readonly rotation: Vec3;
   readonly hinge: 'left' | 'right';
   readonly side: 'left' | 'right' | 'full';
 }
@@ -81,6 +86,7 @@ export interface DrawerParams {
   readonly height: number;
   readonly depth: number;
   readonly position: Vec3;
+  readonly rotation: Vec3;
 }
 
 export type CabinetNode = SceneNodeBase<'cabinet', CabinetParams>;
@@ -94,6 +100,11 @@ export type SceneNode = CabinetNode | PanelNode | ShelfNode | DoorNode | DrawerN
 // ─── Input types (what users write in api.X({...})) ───
 // These are the *authoring* shape; the stored params above are computed
 // from these at construction time.
+//
+// `rotation?: Vec3` is intrinsic XYZ Euler in degrees. Defaults to [0,0,0].
+// When a shelf/door/drawer is adopted into a cabinet, any standalone
+// `rotation` it carried is dropped — the child inherits the cabinet's
+// rotation via the adoption recompute (same rule as `position`).
 
 export interface CabinetInput {
   readonly width: number;
@@ -101,6 +112,7 @@ export interface CabinetInput {
   readonly depth: number;
   readonly thickness: number;
   readonly position?: Vec3;
+  readonly rotation?: Vec3;
   /**
    * Inline children for this cabinet. Each entry is a SceneNode produced by
    * another `api.X(...)` call (typically `api.shelf` / `api.door` /
@@ -127,6 +139,8 @@ export interface ShelfInput {
    * cabinet — adoption recomputes geometry against the parent's interior.
    */
   readonly position?: Vec3;
+  /** Optional rotation for top-level use. Dropped on adoption. */
+  readonly rotation?: Vec3;
 }
 
 export interface DoorInput {
@@ -139,6 +153,8 @@ export interface DoorInput {
    * adopted by a cabinet.
    */
   readonly position?: Vec3;
+  /** Optional rotation for top-level use. Dropped on adoption. */
+  readonly rotation?: Vec3;
 }
 
 export interface DrawerInput {
@@ -154,6 +170,8 @@ export interface DrawerInput {
    * adopted by a cabinet.
    */
   readonly position?: Vec3;
+  /** Optional rotation for top-level use. Dropped on adoption. */
+  readonly rotation?: Vec3;
 }
 
 export interface PanelInput {
@@ -161,4 +179,5 @@ export interface PanelInput {
   readonly height: number;
   readonly thickness: number;
   readonly position: Vec3;
+  readonly rotation?: Vec3;
 }

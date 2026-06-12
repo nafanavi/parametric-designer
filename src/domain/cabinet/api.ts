@@ -1,4 +1,5 @@
 import type { CoreAPI } from '@/core/api';
+import { applyToLocalPoint } from '@/core/math/transform';
 import type { SolidId, Vec3 } from '@/core/types';
 import type { SourceRange } from '@/model/ast/types';
 import type {
@@ -76,16 +77,29 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
 
   // Internal helper: emits one panel solid + the corresponding panel SceneNode.
   // Frame panels share their parent cabinet's sourceRange — they came from
-  // that one call.
+  // that one call. `localCentre` is in the cabinet's local frame (where the
+  // cabinet's `position` is the local origin); the helper rotates and
+  // translates it by the cabinet's transform to produce the world centre.
   function buildPanelChild(
-    parent: SceneNode,
+    parent: SceneNode & { type: 'cabinet' },
     size: Vec3,
-    centre: Vec3,
+    localCentre: Vec3,
     idx: number,
     label: string,
     sourceRange: SourceRange | undefined,
   ): void {
-    const solid = core.box({ size, transform: { translation: centre } });
+    const cabPos = parent.params.position;
+    const cabRot = parent.params.rotation;
+    const offsetFromCabinet: Vec3 = [
+      localCentre[0] - cabPos[0],
+      localCentre[1] - cabPos[1],
+      localCentre[2] - cabPos[2],
+    ];
+    const worldCentre = applyToLocalPoint(
+      { translation: cabPos, rotation: cabRot },
+      offsetFromCabinet,
+    );
+    const solid = core.box({ size, transform: { translation: worldCentre, rotation: cabRot } });
     const node: SceneNode = {
       type: 'panel',
       id: makeId('panel', sourceRange, idx, label),
@@ -95,7 +109,8 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         width: size[0],
         height: size[1],
         thickness: size[2],
-        position: centre,
+        position: worldCentre,
+        rotation: cabRot,
       },
       solids: [solid],
       children: [],
@@ -111,10 +126,11 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       const idx = ctx.nextCall();
       const sourceRange = currentRange();
       const position: Vec3 = input.position ?? ZERO;
-      const params: CabinetParams = { ...input, position };
+      const rotation: Vec3 = input.rotation ?? ZERO;
+      const params: CabinetParams = { ...input, position, rotation };
       const { width: w, height: h, depth: d, thickness: t } = params;
 
-      const node: SceneNode = {
+      const node: SceneNode & { type: 'cabinet' } = {
         type: 'cabinet',
         id: makeId('cabinet', sourceRange, idx),
         callIndex: idx,
@@ -127,7 +143,9 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       ctx.collect(node);
 
       const [px, py, pz] = position;
-      // Frame: left, right, top, bottom, back panels.
+      // Frame: left, right, top, bottom, back panels. Centres are computed
+      // in cabinet-local coordinates and then rotated/translated inside
+      // `buildPanelChild` so they follow the cabinet's rotation.
       buildPanelChild(node, [t, h, d],          [px - w / 2 + t / 2, py + h / 2, pz],                  idx, 'left',   sourceRange);
       buildPanelChild(node, [t, h, d],          [px + w / 2 - t / 2, py + h / 2, pz],                  idx, 'right',  sourceRange);
       buildPanelChild(node, [w, t, d],          [px, py + h - t / 2, pz],                              idx, 'top',    sourceRange);
@@ -147,16 +165,17 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
     panel(input) {
       const idx = ctx.nextCall();
       const sourceRange = currentRange();
+      const rotation = input.rotation ?? ZERO;
       const solid = core.box({
         size: [input.width, input.height, input.thickness],
-        transform: { translation: input.position },
+        transform: { translation: input.position, rotation },
       });
       const node: SceneNode = {
         type: 'panel',
         id: makeId('panel', sourceRange, idx),
         callIndex: idx,
         ...(sourceRange ? { sourceRange } : {}),
-        params: input,
+        params: { ...input, rotation },
         solids: [solid],
         children: [],
         parentId: null,

@@ -49,12 +49,17 @@ export function SolidMesh({ snapshot, selected, dropTarget, nodeType, onPointerD
   useEffect(() => () => geometry.dispose(), [geometry]);
 
   const [tx, ty, tz] = snapshot.transform.translation;
+  const [rxDeg, ryDeg, rzDeg] = snapshot.transform.rotation;
+  // Three.js uses radians and defaults to 'XYZ' intrinsic Euler order, which
+  // matches our authoring convention — direct passthrough.
+  const DEG = Math.PI / 180;
   const baseColor = COLOR_BY_TYPE[nodeType] ?? '#c9a26a';
 
   return (
     <mesh
       geometry={geometry}
       position={[tx, ty, tz]}
+      rotation={[rxDeg * DEG, ryDeg * DEG, rzDeg * DEG]}
       onPointerDown={onPointerDown}
       castShadow
       receiveShadow

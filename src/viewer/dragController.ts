@@ -18,6 +18,16 @@ import type {
   ShelfInput,
 } from '@/domain/cabinet/types';
 import type { SceneQuery } from '@/model/scene/query';
+import type { Vec3 } from '@/core/types';
+
+const ROT_EPS = 1e-6;
+function isRotated(rotation: Vec3): boolean {
+  return (
+    Math.abs(rotation[0]) > ROT_EPS ||
+    Math.abs(rotation[1]) > ROT_EPS ||
+    Math.abs(rotation[2]) > ROT_EPS
+  );
+}
 
 export interface DragAxes {
   readonly x: boolean;
@@ -97,6 +107,12 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
       }
       const parent = query.getNode(node.parentId);
       if (!parent || parent.type !== 'cabinet') return NO_DRAG;
+      // PR-1 limitation: in-cabinet shelf/drawer drag uses a world-axis Y
+      // plane and writes a cabinet-local `y` by subtracting world floor Y.
+      // That math is wrong once the cabinet rotates — the cabinet's local Y
+      // no longer points along world Y. Block the drag until PR-2 introduces
+      // proper local-space drags.
+      if (isRotated(parent.params.rotation)) return NO_DRAG;
       const cab = parent.params;
       // Interior y bounds in the SAME frame as the shelf's `input.y`
       // (cabinet-floor-relative). Half a thickness of clearance from the
@@ -142,9 +158,15 @@ export interface CabinetRayHit {
  * `excludeId` skips a node from the test. Returns the cab id plus the
  * world Y where the ray pierces it, so callers can track the cursor's
  * vertical position over the cabinet during a drag.
+ *
+ * Uses the SceneQuery's aggregated AABB (which composes the kernel's
+ * rotation-aware per-solid AABBs), so a rotated cabinet is hit-tested
+ * against its loose world AABB rather than a stale axis-aligned one
+ * derived from `width/depth`.
  */
 export function findCabinetUnderRay(
   result: { readonly nodes: readonly SceneNode[] },
+  query: SceneQuery,
   origin: readonly [number, number, number],
   dir: readonly [number, number, number],
   excludeId?: string,
@@ -154,13 +176,17 @@ export function findCabinetUnderRay(
   for (const node of result.nodes) {
     if (node.type !== 'cabinet') continue;
     if (excludeId && node.id === excludeId) continue;
-    const { position, width, height, depth } = node.params;
+    // PR-1: drop-onto-rotated-cabinet uses the default interior position
+    // (see snapToCabinetInterior). Still hit-test rotated cabinets so the
+    // candidate-parent highlight works; the adoption math itself is just
+    // simplified for the rotated case.
+    const aabb = query.aabbOf(node.id);
     const t = rayAabbEntryT(
       origin,
       dir,
-      position[0] - width / 2, position[0] + width / 2,
-      position[1], position[1] + height,
-      position[2] - depth / 2, position[2] + depth / 2,
+      aabb.min[0], aabb.max[0],
+      aabb.min[1], aabb.max[1],
+      aabb.min[2], aabb.max[2],
     );
     if (t !== null && t < bestT) {
       bestT = t;
@@ -205,6 +231,12 @@ function rayAabbEntryT(
  * the part will look like once adopted. Centres X/Z on the cabinet and
  * clamps Y to the interior so the user sees the shelf sit inside the cabinet
  * during the drag, matching what `adopt()` will compute on commit.
+ *
+ * Rotated cabinets in PR-1: the world X/Z preview would have to rotate
+ * with the cabinet to be accurate; instead we snap to the cabinet's
+ * centre at mid-height. The drop itself still adopts (the geometry recompute
+ * inside `adopt()` will place the child correctly), it's only the drag
+ * preview that's simplified.
  */
 export function snapToCabinetInterior(
   cabinet: SceneNode & { type: 'cabinet' },
@@ -214,6 +246,9 @@ export function snapToCabinetInterior(
   const halfT = cab.thickness / 2;
   const yMin = cab.position[1] + cab.thickness + halfT;
   const yMax = cab.position[1] + cab.height - cab.thickness - halfT;
+  if (isRotated(cab.rotation)) {
+    return [cab.position[0], (yMin + yMax) / 2, cab.position[2]];
+  }
   const clampedY = clamp(worldY, yMin, yMax);
   return [cab.position[0], clampedY, cab.position[2]];
 }

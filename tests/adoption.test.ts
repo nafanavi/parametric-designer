@@ -9,6 +9,7 @@ import {
   insertArrayElement,
 } from '@/model/ast/rewrite';
 import { runModel } from '@/model/runtime';
+import { queryOf } from '@/model/scene/query';
 import {
   findCabinetUnderRay,
   snapToCabinetInterior,
@@ -110,32 +111,37 @@ api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [15
 
   it('finds the cabinet whose footprint the ray passes through', () => {
     const result = runModel(TWO_CABS);
+    const query = queryOf(result);
     const cabs = result.nodes.filter((n) => n.type === 'cabinet');
     const a = downRay(0, 0);
     const b = downRay(1500, 1000);
-    expect(findCabinetUnderRay(result, a.origin, a.dir)?.id).toBe(cabs[0].id);
-    expect(findCabinetUnderRay(result, b.origin, b.dir)?.id).toBe(cabs[1].id);
+    expect(findCabinetUnderRay(result, query, a.origin, a.dir)?.id).toBe(cabs[0].id);
+    expect(findCabinetUnderRay(result, query, b.origin, b.dir)?.id).toBe(cabs[1].id);
   });
 
   it('returns null when the ray misses every cabinet', () => {
     const result = runModel(TWO_CABS);
+    const query = queryOf(result);
     const r = downRay(700, 0);
-    expect(findCabinetUnderRay(result, r.origin, r.dir)).toBeNull();
+    expect(findCabinetUnderRay(result, query, r.origin, r.dir)).toBeNull();
   });
 
   it('honours excludeId', () => {
     const result = runModel(TWO_CABS);
+    const query = queryOf(result);
     const cab0 = result.nodes[0];
     const r = downRay(0, 0);
-    expect(findCabinetUnderRay(result, r.origin, r.dir, cab0.id)).toBeNull();
+    expect(findCabinetUnderRay(result, query, r.origin, r.dir, cab0.id)).toBeNull();
   });
 
   it('picks the nearer cabinet when the ray passes through both (front-to-back)', () => {
     const result = runModel(TWO_CABS);
+    const query = queryOf(result);
     const cabs = result.nodes.filter((n) => n.type === 'cabinet');
     const cab0 = cabs.find((c) => c.type === 'cabinet' && c.params.position[0] === 0)!;
     const aimAt0 = findCabinetUnderRay(
       result,
+      query,
       [-5000, 900, 0],
       [1, 0, 0],
     );
@@ -143,6 +149,7 @@ api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [15
     const cab1 = cabs.find((c) => c.type === 'cabinet' && c.params.position[0] === 1500)!;
     const aimAt1 = findCabinetUnderRay(
       result,
+      query,
       [800, 900, 1000],
       [1, 0, 0],
     );
@@ -151,12 +158,13 @@ api.cabinet({ width: 800, height: 1800, depth: 400, thickness: 18, position: [15
 
   it('reports the world Y where the ray first pierces the cabinet', () => {
     const result = runModel(TWO_CABS);
+    const query = queryOf(result);
     // Down-ray over cab0 — top face is at y = height = 1800.
-    const hit = findCabinetUnderRay(result, [0, 10000, 0], [0, -1, 0]);
+    const hit = findCabinetUnderRay(result, query, [0, 10000, 0], [0, -1, 0]);
     expect(hit?.entryY).toBe(1800);
     // Horizontal +X ray at y=900 — enters cab0's left wall at x = -400.
     // Entry Y equals the ray's Y at entry, which is 900 throughout.
-    const side = findCabinetUnderRay(result, [-5000, 900, 0], [1, 0, 0]);
+    const side = findCabinetUnderRay(result, query, [-5000, 900, 0], [1, 0, 0]);
     expect(side?.entryY).toBe(900);
   });
 });
