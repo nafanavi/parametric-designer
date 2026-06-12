@@ -12,9 +12,9 @@ src/
 │   ├── api.ts             # interface: box, translate, union, subtract, snapshot
 │   └── stub.ts            # in-memory stand-in; swap for ClassCAD later
 ├── domain/cabinet/        # DomainAPI for cabinets
-│   ├── api.ts             # cabinet, panel, shelf, door, drawer
-│   └── actions.ts         # Action functions → SourceEdit (UI toolbar)
+│   └── api.ts             # cabinet, panel, shelf, door, drawer
 ├── model/                 # ParametricModel as source code
+│   ├── ast/               # acorn-based AST rewrites (property writes, child insert, delete)
 │   ├── runtime.ts         # evaluates source string → scene tree + params
 │   └── example.ts         # initial source loaded into the editor
 ├── viewer/                # Three.js scene (R3F)
@@ -22,7 +22,8 @@ src/
 │   └── SolidMesh.tsx
 ├── editor/                # Visual editor shell
 │   ├── EditorLayout.tsx
-│   ├── ActionToolbar.tsx
+│   ├── ActionToolbar.tsx  # top toolbar (Prompt toggle)
+│   ├── CatalogPanel.tsx   # drag-source for new parts
 │   ├── SourcePanel.tsx
 │   └── PropertyPanel.tsx
 └── store/
@@ -31,7 +32,7 @@ src/
 
 ## How a change flows through the system
 
-1. User edits the source text (or clicks an action button → applies a `SourceEdit`).
+1. User edits the source text (or drags a part from the catalog / viewport, which rewrites the source via AST helpers).
 2. `runModel()` evaluates the source with `api` (DomainAPI) and `param()` in scope.
 3. Each DomainAPI call drops a `SceneNode` into the tree and creates `SolidId`s
    in the CoreAPI.
