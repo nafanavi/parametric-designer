@@ -3,13 +3,17 @@
 import { create } from 'zustand';
 import { EXAMPLE_MODEL_SOURCE } from '@/model/example';
 import { runModel, type ParamDef, type RunResult } from '@/model/runtime';
-import { rewriteCallProperty, removeCallStatement } from '@/model/ast/rewrite';
+import {
+  findChildrenArrayRange,
+  insertArrayElement,
+  removeCallStatement,
+  rewriteCallProperty,
+} from '@/model/ast/rewrite';
 import { generateModel } from '@/model/llm';
 import { repairSource } from '@/model/repair';
 import { queryOf } from '@/model/scene/query';
 import {
   computeEditDelta,
-  promoteToConceptualOwner,
   reresolveSelection,
 } from '@/model/runtime/selection';
 import type { SourceEdit } from '@/domain/cabinet/actions';
@@ -36,6 +40,16 @@ interface ModelState {
   promptStatus: PromptStatus;
   promptHeight: number;
 
+  /** Right-side catalog sidebar — open/close toggle. */
+  catalogOpen: boolean;
+  /**
+   * Catalog drag armed. Set on catalog-tile pointerdown; cleared on
+   * pointerup or cancel. Carries only the item id — the rest of the drag
+   * (materialised node, transient position, candidate parent) lives in
+   * the viewport's local refs, same as any scene drag.
+   */
+  catalogDrag: { readonly itemId: string } | null;
+
   setSource: (source: string) => void;
   /**
    * Per-instance edit: rewrites a property of the currently-selected node's
@@ -56,10 +70,33 @@ interface ModelState {
   select: (nodeId: string | null) => void;
   applyEdit: (edit: SourceEdit) => void;
 
+  /**
+   * Adoption commit: move the currently-selected top-level part into a
+   * target cabinet's `children: [...]` array. The source is rewritten in
+   * one commit — remove the part's original call, insert a child entry
+   * into the target cabinet — so the selection re-resolves cleanly to
+   * the adopted node afterwards. No-op when:
+   *   - nothing is selected,
+   *   - the selected node has no sourceRange,
+   *   - the target cabinet has no `children: [...]` array literal in source.
+   * `childCode` is the snippet to insert (without trailing comma).
+   */
+  moveSelectionIntoCabinet: (
+    targetCabinetId: string,
+    childCode: string,
+  ) => Promise<void>;
+
   togglePrompt: () => void;
   setPromptOpen: (open: boolean) => void;
   setPromptHeight: (height: number) => void;
   submitPrompt: (text: string) => Promise<void>;
+
+  toggleCatalog: () => void;
+  setCatalogOpen: (open: boolean) => void;
+  /** Arm a catalog drag — the Scene takes over from here. */
+  startCatalogDrag: (itemId: string) => void;
+  /** End the catalog drag without committing anything (cursor left canvas, ESC, etc). */
+  cancelCatalogDrag: () => void;
 }
 
 const initialResult = runModel(EXAMPLE_MODEL_SOURCE);
@@ -167,6 +204,9 @@ export const useModelStore = create<ModelState>((set, get) => {
   promptStatus: { kind: 'idle' },
   promptHeight: 240,
 
+  catalogOpen: false,
+  catalogDrag: null,
+
   setSource: (source) => {
     // Debug textarea path. We deliberately do NOT route through commitSource
     // here — the developer is editing source directly and any runtime error
@@ -194,19 +234,47 @@ export const useModelStore = create<ModelState>((set, get) => {
     await commitSource(next, { selection: null });
   },
 
+  moveSelectionIntoCabinet: async (targetCabinetId, childCode) => {
+    const { source, selection, result } = get();
+    if (!selection) return;
+    const q = queryOf(result);
+    const dragged = q.getNode(selection);
+    const target = q.getNode(targetCabinetId);
+    if (!dragged?.sourceRange || !target?.sourceRange) return;
+    if (target.type !== 'cabinet') return;
+    if (dragged.id === target.id) return;
+
+    // Locate the target cabinet's `children: [...]` array literal.
+    const arrayRange = findChildrenArrayRange(source, target.sourceRange);
+    if (!arrayRange) return; // cabinet has no `children` field — v1 doesn't synthesise one.
+
+    // Apply both edits in one new source string. The order is critical
+    // because byte offsets shift: do the rightmost edit first so the
+    // earlier offsets stay valid.
+    const draggedRange = dragged.sourceRange;
+    let next: string;
+    if (draggedRange.start > arrayRange.end) {
+      // Dragged call lives AFTER the cabinet's children array — remove
+      // it first (later offset), then insert into the still-correct array.
+      const afterRemove = removeCallStatement(source, draggedRange);
+      next = insertArrayElement(afterRemove, arrayRange, childCode);
+    } else {
+      // Dragged call lives BEFORE the array — insert first (offsets after
+      // the array shift, but `draggedRange` is BEFORE so it's still valid),
+      // then remove.
+      const afterInsert = insertArrayElement(source, arrayRange, childCode);
+      next = removeCallStatement(afterInsert, draggedRange);
+    }
+    await commitSource(next);
+  },
+
   select: (nodeId) => {
-    // Selection changes are also dropped during a repair — keeps the
-    // selected part anchored to the in-flight action so the spinner stays
-    // pinned and `onSuccess: { selection: null }` clears the right node
-    // when the repair lands.
+    // Narrow primitive: set selection. Promotion ("clicking a frame panel
+    // selects the cabinet") is a UI concern — it lives in the viewport's
+    // click handler, not here. Other call sites (catalog materialize, LLM
+    // tools) need to set selection directly without rewriting their id.
     if (get().isRepairing) return;
-    // Promote clicks on internal pieces (e.g. a frame panel of a cabinet —
-    // it shares the cabinet's sourceRange) up to the conceptual owner so
-    // the user lands on the part they actually meant to select.
-    const promoted = nodeId
-      ? promoteToConceptualOwner(nodeId, get().result)
-      : null;
-    set({ selection: promoted });
+    set({ selection: nodeId });
   },
 
   applyEdit: (edit) => {
@@ -223,6 +291,16 @@ export const useModelStore = create<ModelState>((set, get) => {
   togglePrompt: () => set((s) => ({ promptOpen: !s.promptOpen })),
   setPromptOpen: (open) => set({ promptOpen: open }),
   setPromptHeight: (height) => set({ promptHeight: height }),
+
+  toggleCatalog: () => set((s) => ({ catalogOpen: !s.catalogOpen })),
+  setCatalogOpen: (open) => set({ catalogOpen: open }),
+  startCatalogDrag: (itemId) => {
+    // Don't arm a drag during a repair — the source is in flux and the
+    // commit on drop could race the repair commit.
+    if (get().isRepairing) return;
+    set({ catalogDrag: { itemId } });
+  },
+  cancelCatalogDrag: () => set({ catalogDrag: null }),
 
   submitPrompt: async (text) => {
     const trimmed = text.trim();

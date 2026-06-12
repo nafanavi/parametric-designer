@@ -7,6 +7,7 @@ import { ActionToolbar } from './ActionToolbar';
 import { SourcePanel } from './SourcePanel';
 import { PropertyPanel } from './PropertyPanel';
 import { PromptPanel } from './PromptPanel';
+import { CatalogPanel } from './CatalogPanel';
 
 const Scene = dynamic(() => import('@/viewer/Scene').then((m) => m.Scene), {
   ssr: false,
@@ -19,6 +20,8 @@ const Scene = dynamic(() => import('@/viewer/Scene').then((m) => m.Scene), {
 
 export function EditorLayout() {
   const promptOpen = useModelStore((s) => s.promptOpen);
+  const catalogOpen = useModelStore((s) => s.catalogOpen);
+  const toggleCatalog = useModelStore((s) => s.toggleCatalog);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -51,8 +54,22 @@ export function EditorLayout() {
             scratch
           </span>
         </div>
-        <div className="text-[10px] text-gray-500">
-          CoreAPI: stub (BREP kernel pending)
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={toggleCatalog}
+            className={
+              'text-[11px] px-2 py-1 rounded-md border border-border ' +
+              'hover:border-orange-400/60 transition-colors ' +
+              (catalogOpen ? 'bg-panel border-orange-400 text-orange-300' : 'text-gray-300')
+            }
+            aria-pressed={catalogOpen}
+          >
+            {catalogOpen ? 'Hide catalog' : 'Show catalog'}
+          </button>
+          <div className="text-[10px] text-gray-500">
+            CoreAPI: stub (BREP kernel pending)
+          </div>
         </div>
       </header>
 
@@ -71,7 +88,17 @@ export function EditorLayout() {
         <div className="relative min-h-0 min-w-0 overflow-hidden">
           <Scene />
         </div>
-        <PropertyPanel />
+        {/* PropertyPanel and CatalogPanel share the right column. When the
+            catalog is open it overlays the property panel; no layout shift,
+            and closing the catalog reveals the panel underneath unchanged. */}
+        <div className="relative min-h-0">
+          <PropertyPanel />
+          {catalogOpen && (
+            <div className="absolute inset-0 z-10">
+              <CatalogPanel />
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );

@@ -59,14 +59,15 @@ export function shelfGeometry(
       pz + parent.thickness / 2 - inset / 2,
     ];
   } else {
-    // Free-floating defaults. PR-A note: a shelf authored outside any
-    // `children: [...]` lives at world coordinates with placeholder sizes
-    // — useful for drag-and-drop, but the geometry is re-derived as soon
-    // as the shelf is adopted by a cabinet.
+    // Free-floating defaults. When `input.position` is set (catalog drop),
+    // the world position from source wins; otherwise we anchor at
+    // [0, input.y, 0] for the historical authoring shape `api.shelf({ y })`.
+    // Either way the geometry is re-derived as soon as the shelf is
+    // adopted into a cabinet.
     width = 600;
     depth = 300 - inset;
     thickness = 18;
-    centre = [0, input.y, 0];
+    centre = input.position ?? [0, input.y, 0];
   }
 
   const solid = core.box({
@@ -108,11 +109,13 @@ export function doorGeometry(
       centre = [px + parent.width / 4, doorY, doorZ];
     }
   } else {
-    // Free-floating door at world origin, full-size defaults.
+    // Free-floating door — full-size defaults, anchored at `input.position`
+    // when present (catalog drop) and otherwise at world origin so the
+    // legacy bare `api.door({ side })` still produces something visible.
     width = input.side === 'full' ? 798 : 398;
     height = 1798;
     thickness = 18;
-    centre = [0, height / 2, 0];
+    centre = input.position ?? [0, height / 2, 0];
   }
 
   const solid = core.box({
@@ -146,7 +149,7 @@ export function drawerGeometry(
   } else {
     width = 400;
     depth = 300;
-    centre = [0, input.y + input.height / 2, 0];
+    centre = input.position ?? [0, input.y + input.height / 2, 0];
   }
 
   const solid = core.box({

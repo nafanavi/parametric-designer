@@ -11,7 +11,12 @@
  * change — no viewport edits required.
  */
 
-import type { SceneNode } from '@/domain/cabinet/types';
+import type {
+  DoorInput,
+  DrawerInput,
+  SceneNode,
+  ShelfInput,
+} from '@/domain/cabinet/types';
 import type { SceneQuery } from '@/model/scene/query';
 
 export interface DragAxes {
@@ -79,7 +84,17 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
     }
     case 'shelf':
     case 'drawer': {
-      if (node.parentId === null) return NO_DRAG; // top-level: deferred
+      if (node.parentId === null) {
+        // Top-level (catalog drop or hand-authored standalone). The input
+        // type carries an optional `position`, so the part has world
+        // coordinates we can round-trip through source as an array literal.
+        return {
+          axes: { x: true, y: true, z: true },
+          yBounds: null,
+          write: { kind: 'positionArray', originalY: node.params.position[1] },
+          originalWorld: node.params.position,
+        };
+      }
       const parent = query.getNode(node.parentId);
       if (!parent || parent.type !== 'cabinet') return NO_DRAG;
       const cab = parent.params;
@@ -101,8 +116,138 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
         originalWorld: node.params.position,
       };
     }
-    case 'door':
+    case 'door': {
+      if (node.parentId === null) {
+        return {
+          axes: { x: true, y: true, z: true },
+          yBounds: null,
+          write: { kind: 'positionArray', originalY: node.params.position[1] },
+          originalWorld: node.params.position,
+        };
+      }
       return NO_DRAG;
+    }
+  }
+}
+
+export interface CabinetRayHit {
+  readonly id: string;
+  /** World Y where the ray first pierces the cabinet AABB. */
+  readonly entryY: number;
+}
+
+/**
+ * Top-level cabinet whose AABB the ray hits first (smallest entry t).
+ * `origin` in mm, `dir` in any units (sign matters, magnitude doesn't).
+ * `excludeId` skips a node from the test. Returns the cab id plus the
+ * world Y where the ray pierces it, so callers can track the cursor's
+ * vertical position over the cabinet during a drag.
+ */
+export function findCabinetUnderRay(
+  result: { readonly nodes: readonly SceneNode[] },
+  origin: readonly [number, number, number],
+  dir: readonly [number, number, number],
+  excludeId?: string,
+): CabinetRayHit | null {
+  let bestId: string | null = null;
+  let bestT = Infinity;
+  for (const node of result.nodes) {
+    if (node.type !== 'cabinet') continue;
+    if (excludeId && node.id === excludeId) continue;
+    const { position, width, height, depth } = node.params;
+    const t = rayAabbEntryT(
+      origin,
+      dir,
+      position[0] - width / 2, position[0] + width / 2,
+      position[1], position[1] + height,
+      position[2] - depth / 2, position[2] + depth / 2,
+    );
+    if (t !== null && t < bestT) {
+      bestT = t;
+      bestId = node.id;
+    }
+  }
+  if (bestId === null) return null;
+  return { id: bestId, entryY: origin[1] + bestT * dir[1] };
+}
+
+function rayAabbEntryT(
+  origin: readonly [number, number, number],
+  dir: readonly [number, number, number],
+  minX: number, maxX: number,
+  minY: number, maxY: number,
+  minZ: number, maxZ: number,
+): number | null {
+  let tEnter = -Infinity;
+  let tExit = Infinity;
+  const mins = [minX, minY, minZ];
+  const maxs = [maxX, maxY, maxZ];
+  for (let i = 0; i < 3; i++) {
+    const o = origin[i];
+    const d = dir[i];
+    if (Math.abs(d) < 1e-9) {
+      if (o < mins[i] || o > maxs[i]) return null;
+      continue;
+    }
+    let t1 = (mins[i] - o) / d;
+    let t2 = (maxs[i] - o) / d;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    if (t1 > tEnter) tEnter = t1;
+    if (t2 < tExit) tExit = t2;
+    if (tEnter > tExit) return null;
+  }
+  if (tExit < 0) return null;
+  return tEnter >= 0 ? tEnter : 0;
+}
+
+/**
+ * Snap a free-floating drag position to the interior of a cabinet — what
+ * the part will look like once adopted. Centres X/Z on the cabinet and
+ * clamps Y to the interior so the user sees the shelf sit inside the cabinet
+ * during the drag, matching what `adopt()` will compute on commit.
+ */
+export function snapToCabinetInterior(
+  cabinet: SceneNode & { type: 'cabinet' },
+  worldY: number,
+): readonly [number, number, number] {
+  const cab = cabinet.params;
+  const halfT = cab.thickness / 2;
+  const yMin = cab.position[1] + cab.thickness + halfT;
+  const yMax = cab.position[1] + cab.height - cab.thickness - halfT;
+  const clampedY = clamp(worldY, yMin, yMax);
+  return [cab.position[0], clampedY, cab.position[2]];
+}
+
+/**
+ * Source snippet for adopting `node` into a cabinet at cabinet-floor-
+ * relative `cabRelY`. Derived from the node's `adoptionInput` (its
+ * authoring shape), so any non-default fields the user set on a
+ * standalone part — door side, drawer height, shelf inset — survive the
+ * adoption. Returns null for nodes that can't be adopted today (cabinets,
+ * panels). Distance values are rounded to 0.1 mm for source readability.
+ */
+export function snippetForAdoption(node: SceneNode, cabRelY: number): string | null {
+  switch (node.type) {
+    case 'shelf': {
+      const input = node.adoptionInput as ShelfInput | undefined;
+      const inset = input?.inset;
+      const insetFrag = inset && inset !== 0 ? `, inset: ${round1(inset)}` : '';
+      return `api.shelf({ y: ${round1(cabRelY)}${insetFrag} })`;
+    }
+    case 'door': {
+      const input = node.adoptionInput as DoorInput | undefined;
+      const side = input?.side ?? 'full';
+      const hinge = input?.hinge;
+      const hingeFrag = hinge ? `, hinge: '${hinge}'` : '';
+      return `api.door({ side: '${side}'${hingeFrag} })`;
+    }
+    case 'drawer': {
+      const input = node.adoptionInput as DrawerInput | undefined;
+      const height = input?.height ?? 200;
+      return `api.drawer({ y: ${round1(cabRelY)}, height: ${round1(height)} })`;
+    }
+    default:
+      return null;
   }
 }
 

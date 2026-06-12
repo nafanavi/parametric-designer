@@ -9,6 +9,13 @@ import type { SolidSnapshot } from '@/core/types';
 interface Props {
   snapshot: SolidSnapshot;
   selected: boolean;
+  /**
+   * Drop-target highlight: true when a drag-and-drop in progress is
+   * hovering over the conceptual owner of this mesh (a cabinet about to
+   * adopt the dragged part). Visualised as a teal edge outline so it
+   * doesn't collide with the orange selection outline.
+   */
+  dropTarget?: boolean;
   nodeType: string;
   /**
    * Raw pointerdown from the mesh. The Scene decides what it means — a
@@ -28,8 +35,9 @@ const COLOR_BY_TYPE: Record<string, string> = {
 };
 
 const SELECTION_OUTLINE = '#ff8a4c';
+const DROP_TARGET_OUTLINE = '#4cc9f0';
 
-export function SolidMesh({ snapshot, selected, nodeType, onPointerDown }: Props) {
+export function SolidMesh({ snapshot, selected, dropTarget, nodeType, onPointerDown }: Props) {
   const geometry = useMemo(() => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(snapshot.mesh.positions, 3));
@@ -53,8 +61,16 @@ export function SolidMesh({ snapshot, selected, nodeType, onPointerDown }: Props
       {/* Selection indicator: outline rendered as geometry edges; the part's
           fill colour is left unchanged so a selected door still LOOKS like a
           door, not a highlighted blob. Edges sit ~angle-threshold above the
-          coplanar surfaces so they show against any background. */}
-      {selected && <Edges color={SELECTION_OUTLINE} lineWidth={2} threshold={15} />}
+          coplanar surfaces so they show against any background.
+
+          Drop-target wins when both are true (you're about to drop into the
+          selected cabinet) — the teal outline is more informative in that
+          moment than the selection's orange. */}
+      {dropTarget ? (
+        <Edges color={DROP_TARGET_OUTLINE} lineWidth={2} threshold={15} />
+      ) : selected ? (
+        <Edges color={SELECTION_OUTLINE} lineWidth={2} threshold={15} />
+      ) : null}
     </mesh>
   );
 }

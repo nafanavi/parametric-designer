@@ -244,6 +244,97 @@ interface ArrayExpressionNode extends Node {
   elements: Array<Node | null>;
 }
 
+/**
+ * Byte range of a cabinet (or any `api.X(...)` call's) `children: [...]`
+ * array literal — inclusive of the surrounding `[` `]`. Used by drag-and-drop
+ * to insert a new child into an existing cabinet's children array.
+ * Returns null when the call has no `children` property or the property's
+ * value isn't an array literal.
+ */
+export function findChildrenArrayRange(
+  source: string,
+  callRange: SourceRange,
+): SourceRange | null {
+  const props = findCallProperties(source, callRange);
+  const children = props.find((p) => p.name === 'children');
+  if (!children) return null;
+  const slice = source.slice(children.valueRange.start, children.valueRange.end);
+  // Cheap structural check — the value must be an array literal. Any other
+  // shape (a function call returning an array, a variable, etc.) needs
+  // different handling.
+  if (slice[0] !== '[' || slice[slice.length - 1] !== ']') return null;
+  return children.valueRange;
+}
+
+/**
+ * Insert a new element at the end of an array literal. Handles both empty
+ * arrays and non-empty arrays:
+ *
+ *   - empty `[]`             →  `[ newCode ]`
+ *   - inline `[ a, b ]`      →  `[ a, b, newCode ]`
+ *   - multi-line `[\n  a,\n]` →  `[\n  a,\n  newCode,\n]`
+ *
+ * The indent for multi-line arrays is sniffed from the last element's
+ * line. Returns the source unchanged when `arrayRange` doesn't point at a
+ * `[ ... ]` literal.
+ */
+export function insertArrayElement(
+  source: string,
+  arrayRange: SourceRange,
+  newCode: string,
+): string {
+  if (source[arrayRange.start] !== '[' || source[arrayRange.end - 1] !== ']') {
+    return source;
+  }
+  const inner = source.slice(arrayRange.start + 1, arrayRange.end - 1);
+
+  // Empty (or whitespace-only) array: `[]` or `[   ]`.
+  if (inner.trim() === '') {
+    return (
+      source.slice(0, arrayRange.start) +
+      '[' + newCode + ']' +
+      source.slice(arrayRange.end)
+    );
+  }
+
+  // Non-empty: detect whether the array's last element is on its own
+  // indented line (multi-line form) or inline. Strategy:
+  //   - Find the last non-whitespace char before the closing `]`.
+  //   - If a newline appears between it and `]`, this is multi-line: use
+  //     the indent of that last element's line for the new line.
+  //   - Otherwise inline: append `, newCode` just before `]`.
+  let last = arrayRange.end - 2;
+  while (last > arrayRange.start && /\s/.test(source[last])) last--;
+  const trailingSlice = source.slice(last + 1, arrayRange.end - 1);
+  const multiLine = trailingSlice.includes('\n');
+
+  let insertion: string;
+  let insertAt: number;
+  if (multiLine) {
+    // Sniff the indent of the line containing `last` — `last` is the last
+    // non-whitespace character before the closing `]`. If that character is
+    // a comma, the existing trailing element already has its separator;
+    // otherwise we need to add one before our new element.
+    const lastIsComma = source[last] === ',';
+    let lineStart = last;
+    while (lineStart > 0 && source[lineStart - 1] !== '\n') lineStart--;
+    const indentMatch = source.slice(lineStart, last).match(/^\s*/);
+    const indent = indentMatch ? indentMatch[0] : '';
+    insertion = lastIsComma
+      ? `${indent}${newCode},\n`
+      : `,\n${indent}${newCode},\n`;
+    // Insert just before the start of the line that holds `]`, so the
+    // closing bracket's existing indent is preserved.
+    let closeLineStart = arrayRange.end - 1;
+    while (closeLineStart > 0 && source[closeLineStart - 1] !== '\n') closeLineStart--;
+    insertAt = closeLineStart;
+  } else {
+    insertion = `, ${newCode}`;
+    insertAt = arrayRange.end - 1; // just before `]`
+  }
+  return source.slice(0, insertAt) + insertion + source.slice(insertAt);
+}
+
 export function findEnclosingArrayElement(
   source: string,
   callRange: SourceRange,
