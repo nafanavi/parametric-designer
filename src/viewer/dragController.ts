@@ -11,7 +11,12 @@
  * change — no viewport edits required.
  */
 
-import type { SceneNode } from '@/domain/cabinet/types';
+import type {
+  DoorInput,
+  DrawerInput,
+  SceneNode,
+  ShelfInput,
+} from '@/domain/cabinet/types';
 import type { SceneQuery } from '@/model/scene/query';
 
 export interface DragAxes {
@@ -125,35 +130,74 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
   }
 }
 
+export interface CabinetRayHit {
+  readonly id: string;
+  /** World Y where the ray first pierces the cabinet AABB. */
+  readonly entryY: number;
+}
+
 /**
- * Find the top-level cabinet whose XZ footprint contains `(worldX, worldZ)`
- * (millimetres). Returns the cabinet's id, or null when the cursor is
- * outside every cabinet. Used to decide adoption during a drag-from-catalog
- * or scene-drag of a free-floating part.
- *
- * `excludeId` skips a specific node — useful when the dragged part itself
- * is a top-level shelf that overlaps a cabinet but isn't a candidate parent
- * for itself.
+ * Top-level cabinet whose AABB the ray hits first (smallest entry t).
+ * `origin` in mm, `dir` in any units (sign matters, magnitude doesn't).
+ * `excludeId` skips a node from the test. Returns the cab id plus the
+ * world Y where the ray pierces it, so callers can track the cursor's
+ * vertical position over the cabinet during a drag.
  */
-export function findCabinetUnderCursor(
+export function findCabinetUnderRay(
   result: { readonly nodes: readonly SceneNode[] },
-  worldX: number,
-  worldZ: number,
+  origin: readonly [number, number, number],
+  dir: readonly [number, number, number],
   excludeId?: string,
-): string | null {
+): CabinetRayHit | null {
+  let bestId: string | null = null;
+  let bestT = Infinity;
   for (const node of result.nodes) {
     if (node.type !== 'cabinet') continue;
     if (excludeId && node.id === excludeId) continue;
-    const { position, width, depth } = node.params;
-    const minX = position[0] - width / 2;
-    const maxX = position[0] + width / 2;
-    const minZ = position[2] - depth / 2;
-    const maxZ = position[2] + depth / 2;
-    if (worldX >= minX && worldX <= maxX && worldZ >= minZ && worldZ <= maxZ) {
-      return node.id;
+    const { position, width, height, depth } = node.params;
+    const t = rayAabbEntryT(
+      origin,
+      dir,
+      position[0] - width / 2, position[0] + width / 2,
+      position[1], position[1] + height,
+      position[2] - depth / 2, position[2] + depth / 2,
+    );
+    if (t !== null && t < bestT) {
+      bestT = t;
+      bestId = node.id;
     }
   }
-  return null;
+  if (bestId === null) return null;
+  return { id: bestId, entryY: origin[1] + bestT * dir[1] };
+}
+
+function rayAabbEntryT(
+  origin: readonly [number, number, number],
+  dir: readonly [number, number, number],
+  minX: number, maxX: number,
+  minY: number, maxY: number,
+  minZ: number, maxZ: number,
+): number | null {
+  let tEnter = -Infinity;
+  let tExit = Infinity;
+  const mins = [minX, minY, minZ];
+  const maxs = [maxX, maxY, maxZ];
+  for (let i = 0; i < 3; i++) {
+    const o = origin[i];
+    const d = dir[i];
+    if (Math.abs(d) < 1e-9) {
+      if (o < mins[i] || o > maxs[i]) return null;
+      continue;
+    }
+    let t1 = (mins[i] - o) / d;
+    let t2 = (maxs[i] - o) / d;
+    if (t1 > t2) [t1, t2] = [t2, t1];
+    if (t1 > tEnter) tEnter = t1;
+    if (t2 < tExit) tExit = t2;
+    if (tEnter > tExit) return null;
+  }
+  if (tExit < 0) return null;
+  return tEnter >= 0 ? tEnter : 0;
 }
 
 /**
@@ -172,6 +216,39 @@ export function snapToCabinetInterior(
   const yMax = cab.position[1] + cab.height - cab.thickness - halfT;
   const clampedY = clamp(worldY, yMin, yMax);
   return [cab.position[0], clampedY, cab.position[2]];
+}
+
+/**
+ * Source snippet for adopting `node` into a cabinet at cabinet-floor-
+ * relative `cabRelY`. Derived from the node's `adoptionInput` (its
+ * authoring shape), so any non-default fields the user set on a
+ * standalone part — door side, drawer height, shelf inset — survive the
+ * adoption. Returns null for nodes that can't be adopted today (cabinets,
+ * panels). Distance values are rounded to 0.1 mm for source readability.
+ */
+export function snippetForAdoption(node: SceneNode, cabRelY: number): string | null {
+  switch (node.type) {
+    case 'shelf': {
+      const input = node.adoptionInput as ShelfInput | undefined;
+      const inset = input?.inset;
+      const insetFrag = inset && inset !== 0 ? `, inset: ${round1(inset)}` : '';
+      return `api.shelf({ y: ${round1(cabRelY)}${insetFrag} })`;
+    }
+    case 'door': {
+      const input = node.adoptionInput as DoorInput | undefined;
+      const side = input?.side ?? 'full';
+      const hinge = input?.hinge;
+      const hingeFrag = hinge ? `, hinge: '${hinge}'` : '';
+      return `api.door({ side: '${side}'${hingeFrag} })`;
+    }
+    case 'drawer': {
+      const input = node.adoptionInput as DrawerInput | undefined;
+      const height = input?.height ?? 200;
+      return `api.drawer({ y: ${round1(cabRelY)}, height: ${round1(height)} })`;
+    }
+    default:
+      return null;
+  }
 }
 
 /** Clamps a value to `[min, max]`. Tiny utility kept here so tests can hit it. */

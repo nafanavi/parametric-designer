@@ -14,7 +14,6 @@ import { repairSource } from '@/model/repair';
 import { queryOf } from '@/model/scene/query';
 import {
   computeEditDelta,
-  promoteToConceptualOwner,
   reresolveSelection,
 } from '@/model/runtime/selection';
 import type { SourceEdit } from '@/domain/cabinet/actions';
@@ -44,14 +43,12 @@ interface ModelState {
   /** Right-side catalog sidebar — open/close toggle. */
   catalogOpen: boolean;
   /**
-   * Catalog drag-in-progress. `null` when no item is being dragged from
-   * the catalog. While set, the viewport renders a 3D ghost at
-   * `ghostMm` and commits a new top-level call on canvas pointer-up.
+   * Catalog drag armed. Set on catalog-tile pointerdown; cleared on
+   * pointerup or cancel. Carries only the item id — the rest of the drag
+   * (materialised node, transient position, candidate parent) lives in
+   * the viewport's local refs, same as any scene drag.
    */
-  catalogDrag: {
-    readonly itemId: string;
-    readonly ghostMm: readonly [number, number, number] | null;
-  } | null;
+  catalogDrag: { readonly itemId: string } | null;
 
   setSource: (source: string) => void;
   /**
@@ -98,8 +95,6 @@ interface ModelState {
   setCatalogOpen: (open: boolean) => void;
   /** Arm a catalog drag — the Scene takes over from here. */
   startCatalogDrag: (itemId: string) => void;
-  /** Update the 3D ghost position (mm). Called during the drag. */
-  setCatalogDragGhost: (ghostMm: readonly [number, number, number] | null) => void;
   /** End the catalog drag without committing anything (cursor left canvas, ESC, etc). */
   cancelCatalogDrag: () => void;
 }
@@ -274,18 +269,12 @@ export const useModelStore = create<ModelState>((set, get) => {
   },
 
   select: (nodeId) => {
-    // Selection changes are also dropped during a repair — keeps the
-    // selected part anchored to the in-flight action so the spinner stays
-    // pinned and `onSuccess: { selection: null }` clears the right node
-    // when the repair lands.
+    // Narrow primitive: set selection. Promotion ("clicking a frame panel
+    // selects the cabinet") is a UI concern — it lives in the viewport's
+    // click handler, not here. Other call sites (catalog materialize, LLM
+    // tools) need to set selection directly without rewriting their id.
     if (get().isRepairing) return;
-    // Promote clicks on internal pieces (e.g. a frame panel of a cabinet —
-    // it shares the cabinet's sourceRange) up to the conceptual owner so
-    // the user lands on the part they actually meant to select.
-    const promoted = nodeId
-      ? promoteToConceptualOwner(nodeId, get().result)
-      : null;
-    set({ selection: promoted });
+    set({ selection: nodeId });
   },
 
   applyEdit: (edit) => {
@@ -309,12 +298,7 @@ export const useModelStore = create<ModelState>((set, get) => {
     // Don't arm a drag during a repair — the source is in flux and the
     // commit on drop could race the repair commit.
     if (get().isRepairing) return;
-    set({ catalogDrag: { itemId, ghostMm: null } });
-  },
-  setCatalogDragGhost: (ghostMm) => {
-    const cur = get().catalogDrag;
-    if (!cur) return;
-    set({ catalogDrag: { itemId: cur.itemId, ghostMm } });
+    set({ catalogDrag: { itemId } });
   },
   cancelCatalogDrag: () => set({ catalogDrag: null }),
 
