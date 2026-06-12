@@ -1,4 +1,4 @@
-# buerli — Cabinet Studio (scratch)
+# Cabinet Studio (scratch)
 
 Low-code platform for parametric 3D configurators. This scratch focuses on the
 cabinet/furniture domain end-to-end so the architecture can be evaluated
