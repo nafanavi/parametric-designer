@@ -129,8 +129,10 @@ export function findCallProperties(source: string, callRange: SourceRange): Call
  * Per-instance rewrite. Replaces the property's value at `callRange` with a
  * plain numeric literal — or, when `value` is an array of numbers, with an
  * `[a, b, c]` literal (the common case for `position: [x, y, z]` on
- * cabinets and standalone panels). Returns the source unchanged if the
- * property isn't found.
+ * cabinets and standalone panels). When the property is absent from the
+ * call's argument object, it is inserted just before the closing `}` so
+ * first-time edits (e.g. rotating a cabinet that was authored without a
+ * `rotation` field) take effect.
  */
 export function rewriteCallProperty(
   source: string,
@@ -138,10 +140,44 @@ export function rewriteCallProperty(
   propertyName: string,
   value: number | readonly number[],
 ): string {
-  const target = findCallProperties(source, callRange).find((p) => p.name === propertyName);
-  if (!target) return source;
   const literal = Array.isArray(value) ? `[${value.join(', ')}]` : String(value);
-  return source.slice(0, target.valueRange.start) + literal + source.slice(target.valueRange.end);
+  const target = findCallProperties(source, callRange).find((p) => p.name === propertyName);
+  if (target) {
+    return source.slice(0, target.valueRange.start) + literal + source.slice(target.valueRange.end);
+  }
+  const insertion = findArgObjectInsertionPoint(source, callRange);
+  if (!insertion) return source;
+  const piece = insertion.isEmpty
+    ? `${propertyName}: ${literal}`
+    : `, ${propertyName}: ${literal}`;
+  return source.slice(0, insertion.at) + piece + source.slice(insertion.at);
+}
+
+/**
+ * Locate the byte just before the closing `}` of the first argument's
+ * object literal for the call at `callRange`. Returned with `isEmpty` so
+ * callers can choose between `name: value` and `, name: value`. Null when
+ * the call has no first argument or that argument isn't an object literal.
+ */
+function findArgObjectInsertionPoint(
+  source: string,
+  callRange: SourceRange,
+): { at: number; isEmpty: boolean } | null {
+  const ast = parseSource(source);
+  if (!ast) return null;
+  let out: { at: number; isEmpty: boolean } | null = null;
+  walkSimple(ast, {
+    CallExpression(node) {
+      const call = node as CallExpressionNode;
+      if (call.start !== callRange.start || call.end !== callRange.end) return;
+      if (call.arguments.length === 0) return;
+      const arg = call.arguments[0];
+      if (arg.type !== 'ObjectExpression') return;
+      const obj = arg as ObjectExpressionNode;
+      out = { at: obj.end - 1, isEmpty: obj.properties.length === 0 };
+    },
+  });
+  return out;
 }
 
 // ─── deletion ──────────────────────────────────────────────────────

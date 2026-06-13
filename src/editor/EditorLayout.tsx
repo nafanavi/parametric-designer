@@ -58,11 +58,8 @@ export function EditorLayout() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      // Forward-Delete on full keyboards; Backspace covers Mac laptops, whose
-      // only "delete" key emits 'Backspace'.
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-      // Don't hijack Delete/Backspace inside the source/prompt textareas,
-      // property-panel number inputs, or any contentEditable region.
+      // Don't hijack typing inside the source/prompt textareas, property-panel
+      // number inputs, or any contentEditable region.
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return;
@@ -70,6 +67,18 @@ export function EditorLayout() {
       const state = useModelStore.getState();
       if (!state.selection) return;
 
+      // Escape clears selection (dismisses the floating action toolbar).
+      // The Scene installs its own Escape handler while a drag is active,
+      // which runs first and tears down the drag without touching selection;
+      // by the time this fires, only the post-drag selection is at stake.
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        state.select(null);
+        return;
+      }
+      // Forward-Delete on full keyboards; Backspace covers Mac laptops, whose
+      // only "delete" key emits 'Backspace'.
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       e.preventDefault();
       state.deleteSelection();
     };

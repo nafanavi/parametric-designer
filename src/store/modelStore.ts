@@ -74,6 +74,16 @@ interface ModelState {
    * `setSelectionParam` — see `commitSource`.
    */
   deleteSelection: () => Promise<void>;
+  /**
+   * Rotate the currently-selected node around world-Y by `deltaDeg`
+   * degrees. Reads the node's current `rotation` (defaulting to `[0,0,0]`),
+   * applies the delta to the Y component, normalizes to (-180, 180], and
+   * writes back via `rewriteCallProperty` — which inserts a `rotation`
+   * field if the call didn't have one. No-op when nothing is selected, the
+   * selection has no sourceRange, or the node is adopted (the domain
+   * drops standalone `rotation` on adoption, so editing it is meaningless).
+   */
+  rotateSelectionY: (deltaDeg: number) => Promise<void>;
   select: (nodeId: string | null) => void;
 
   /**
@@ -242,6 +252,22 @@ export const useModelStore = create<ModelState>((set, get) => {
     if (!node?.sourceRange) return;
     const next = removeCallStatement(source, node.sourceRange);
     await commitSource(next, { selection: null });
+  },
+
+  rotateSelectionY: async (deltaDeg) => {
+    const { source, selection, result } = get();
+    if (!selection) return;
+    const node = queryOf(result).getNode(selection);
+    if (!node?.sourceRange) return;
+    if (node.parentId !== null) return;
+    const params = node.params as { rotation?: readonly [number, number, number] };
+    const [rx, ry, rz] = params.rotation ?? [0, 0, 0];
+    // Normalize into (-180, 180] so successive rotations don't drift toward
+    // ever-larger numbers in source.
+    let nextY = ((ry + deltaDeg) % 360 + 360) % 360;
+    if (nextY > 180) nextY -= 360;
+    const next = rewriteCallProperty(source, node.sourceRange, 'rotation', [rx, nextY, rz]);
+    await commitSource(next);
   },
 
   moveSelectionIntoCabinet: async (targetCabinetId, childCode) => {
