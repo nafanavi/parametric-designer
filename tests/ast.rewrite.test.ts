@@ -413,5 +413,32 @@ describe('removeCallStatement', () => {
       expect(out).not.toContain('api.shelf');
       expect(out).toContain('api.cabinet(');
     });
+
+    // Regression for the "[, ]" hole bug: deleting the sole element of a
+    // multi-line children array with a trailing comma must consume that
+    // comma too. Otherwise the resulting array literal parses as a hole
+    // (`[undefined]`), the runtime hands `undefined` to `ctx.adopt`, and
+    // the user sees a 'Cannot read parentId of undefined' crash that gets
+    // forwarded to LLM repair for what should be a clean delete.
+    it('removes a sole multi-line child and leaves no hole in the array', () => {
+      const src =
+        `api.cabinet({\n` +
+        `  width: 800, position: [0, 0, 0], rotation: [0, 90, 0],\n` +
+        `  children: [\n` +
+        `    api.shelf({ y: 459 }),\n` +
+        `  ],\n` +
+        `});\n`;
+      const shelfStart = src.indexOf('api.shelf');
+      const shelfRange = {
+        start: shelfStart,
+        end: shelfStart + `api.shelf({ y: 459 })`.length,
+      };
+      const out = removeCallStatement(src, shelfRange);
+      expect(out).not.toContain('api.shelf');
+      // The array literal must not contain a stray standalone comma — that
+      // would parse as an array hole.
+      const arrayLiteral = out.slice(out.indexOf('['), out.indexOf(']') + 1);
+      expect(arrayLiteral).not.toMatch(/\[\s*,/);
+    });
   });
 });
