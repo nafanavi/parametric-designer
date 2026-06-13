@@ -30,7 +30,7 @@ export function PropertyPanel() {
   }, [source, selected]);
 
   return (
-    <div className="flex flex-col h-full border-l border-border bg-panel text-gray-100">
+    <div className="flex flex-col h-full bg-panel text-gray-100">
       <div className="px-3 py-2 text-xs uppercase tracking-wide text-gray-400 border-b border-border">
         Selection
       </div>

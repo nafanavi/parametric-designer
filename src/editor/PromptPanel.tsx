@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import { useModelStore } from '@/store/modelStore';
+import { ResizeHandle } from '@/components/ResizeHandle';
 
 const STATUS_COLORS: Record<string, string> = {
   idle: 'text-gray-500',
@@ -23,8 +24,6 @@ export function PromptPanel() {
 
   const rootRef = useRef<HTMLDivElement>(null);
   const [text, setText] = useState('');
-  const [dragging, setDragging] = useState(false);
-  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
 
   const canSubmit = text.trim().length > 0 && status.kind !== 'pending';
 
@@ -33,28 +32,15 @@ export function PromptPanel() {
     void submitPrompt(text);
   };
 
-  const onHandlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
-    dragRef.current = { startY: e.clientY, startHeight: height };
-    setDragging(true);
-  };
-
-  const onHandlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragRef.current) return;
-    const delta = dragRef.current.startY - e.clientY; // drag up → +
+  // Clamp the proposed height to [MIN_HEIGHT, container_max]. ResizeHandle
+  // is dumb on purpose; constraint logic stays here where it has the
+  // context (this panel's parent column height, its min, the sibling's
+  // min reserve).
+  const clampHeight = (next: number): number => {
     const column = rootRef.current?.parentElement;
     const colHeight = column?.clientHeight ?? window.innerHeight;
     const max = Math.max(MIN_HEIGHT, colHeight - MIN_SOURCE_HEIGHT);
-    const next = Math.min(max, Math.max(MIN_HEIGHT, dragRef.current.startHeight + delta));
-    setHeight(next);
-  };
-
-  const onHandlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (!dragRef.current) return;
-    (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
-    dragRef.current = null;
-    setDragging(false);
+    return Math.min(max, Math.max(MIN_HEIGHT, next));
   };
 
   return (
@@ -63,28 +49,15 @@ export function PromptPanel() {
       className="flex flex-col shrink-0 bg-panel-2"
       style={{ height }}
     >
-      <div
-        role="separator"
-        aria-orientation="horizontal"
-        aria-label="Resize prompt panel"
-        onPointerDown={onHandlePointerDown}
-        onPointerMove={onHandlePointerMove}
-        onPointerUp={onHandlePointerUp}
-        onPointerCancel={onHandlePointerUp}
-        className={
-          'group h-1.5 cursor-ns-resize select-none transition-colors ' +
-          (dragging ? 'bg-orange-500' : 'bg-border hover:bg-orange-500/60')
-        }
-      >
-        <div className="mx-auto w-10 h-full flex items-center justify-center">
-          <div
-            className={
-              'w-8 h-0.5 rounded-full transition-colors ' +
-              (dragging ? 'bg-orange-200' : 'bg-gray-500 group-hover:bg-orange-200')
-            }
-          />
-        </div>
-      </div>
+      {/* Handle sits on the panel's TOP edge; dragging UP grows the panel,
+          so `direction: -1` flips raw deltaY into "grow this height". */}
+      <ResizeHandle
+        orientation="horizontal"
+        size={height}
+        direction={-1}
+        onResize={(next) => setHeight(clampHeight(next))}
+        ariaLabel="Resize prompt panel"
+      />
 
       <div className="flex items-center justify-between px-3 h-8 border-b border-border bg-panel">
         <div className="flex items-center gap-2 min-w-0">

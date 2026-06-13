@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { useModelStore } from '@/store/modelStore';
 import { SolidMesh } from './SolidMesh';
+import { SelectionToolbar } from './SelectionToolbar';
 import { queryOf } from '@/model/scene/query';
 import { promoteToConceptualOwner } from '@/model/runtime/selection';
 import {
@@ -625,6 +626,7 @@ function SceneContents() {
       {/* Model is authored in millimetres; scale down for a metres-based scene. */}
       <group scale={0.001}>
         {result.nodes.map((node) => renderNode(node))}
+        <SelectionToolbar hidden={dragRef.current !== null || isRepairing} />
         {spinnerAnchor && (
           <Html position={spinnerAnchor} center zIndexRange={[100, 0]} style={{ pointerEvents: 'none' }}>
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-panel-2/95 border border-border shadow-lg whitespace-nowrap">
