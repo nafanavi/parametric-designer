@@ -1,8 +1,8 @@
 'use client'
 
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber'
-import { OrbitControls, Grid, Environment, Html } from '@react-three/drei'
+import { OrbitControls, Grid, Html } from '@react-three/drei'
 import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useModelStore } from '@/store/modelStore'
@@ -568,22 +568,26 @@ function SceneContents() {
   return (
     <>
       <color attach="background" args={['#15171b']} />
-      <ambientLight intensity={0.4} />
+      {/* Three-light rig replacing drei's HDR <Environment>:
+          - hemisphere fill: cool sky / warm floor gradient gives faces facing
+            up vs. down distinct tones, the main thing the HDR was providing.
+          - key (warm, front-right): primary illumination + shadow caster.
+          - fill (cool, back-left): lifts the shadow side off black so
+            cabinet backs and undersides stay readable.
+          - rim (top-back): a low-intensity accent along the silhouette so
+            parts pop off the dark background. */}
+      <hemisphereLight args={['#f3f6fb', '#4a3a26', 2.2]} />
+      <ambientLight intensity={0.6} />
       <directionalLight
         position={[3, 5, 2]}
-        intensity={1.1}
+        intensity={2.2}
+        color="#fff2dc"
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
       />
-      {/* Drei's Environment downloads an HDR cube map asynchronously. Under
-          R3F 9 + React 19 StrictMode, an un-suspended load races the canvas
-          init and the WebGL context drops ("Canvas has an existing context
-          of a different type"). Wrapping in Suspense lets the canvas finish
-          mounting before the loader resolves. */}
-      <Suspense fallback={null}>
-        <Environment preset="city" />
-      </Suspense>
+      <directionalLight position={[-3, 3, -2]} intensity={1.0} color="#c8d4e6" />
+      <directionalLight position={[0, 6, -3]} intensity={0.6} color="#ffffff" />
 
       {/* Model is authored in millimetres; scale down for a metres-based scene. */}
       <group scale={0.001}>
@@ -615,22 +619,6 @@ function SceneContents() {
 
 export function Scene() {
   const select = useModelStore((s) => s.select)
-  // React 19 + StrictMode double-mounts the component subtree in dev. R3F 9's
-  // WebGL teardown can race the remount, leaving the canvas DOM element in a
-  // half-disposed state — Three throws "Canvas has an existing context of a
-  // different type" and the viewport turns white. Defer Canvas mount until
-  // after the first effect runs so only the second (post-StrictMode-probe)
-  // mount actually creates a context.
-  const [mounted, setMounted] = useState(false)
-  // One-shot mount flag — the cascading-render concern the lint rule guards
-  // against doesn't apply: this setState fires exactly once on first commit
-  // and is the entire point of the gate. Without it, R3F 9 races the
-  // StrictMode double-mount and leaves the canvas with a dead WebGL context.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMounted(true)
-  }, [])
-  if (!mounted) return null
   return (
     <Canvas
       shadows

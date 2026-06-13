@@ -67,7 +67,7 @@ export function SolidMesh({ snapshot, selected, dropTarget, nodeType, onPointerD
       castShadow
       receiveShadow
     >
-      <meshStandardMaterial color={baseColor} roughness={0.6} metalness={0.05} />
+      <meshStandardMaterial color={baseColor} roughness={0.45} metalness={0.08} />
       {/* Selection indicator: outline rendered as geometry edges; the part's
           fill colour is left unchanged so a selected door still LOOKS like a
           door, not a highlighted blob. Edges sit ~angle-threshold above the
