@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
 import { OrbitControls, Grid, Environment, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -417,16 +417,52 @@ function SceneContents() {
     [deleteSelection, tearDown],
   );
 
+  // Window-level drag listeners are managed through a single `install` /
+  // `uninstall` pair built once for the component's lifetime. Both
+  // functions close over the SAME forwarder closures, so addEventListener
+  // and removeEventListener are always symmetric — no "registered with X
+  // but removed with Y" mismatches even as the underlying callbacks'
+  // identities change between renders.
+  //
+  // The forwarders read the latest callback through refs. We must NOT
+  // register the bare `onWindow*` callbacks directly: `onWindowUp` has
+  // `candidateParentId` in its deps and rerenders during a drag, which
+  // would otherwise tear down and re-add listeners on every pointermove —
+  // for a scene-item drag, nothing re-adds them, so the drag would die
+  // the moment the cursor enters a candidate cabinet.
+  const onWindowMoveRef = useRef(onWindowMove);
+  const onWindowUpRef = useRef(onWindowUp);
+  const onWindowKeyRef = useRef(onWindowKey);
+  onWindowMoveRef.current = onWindowMove;
+  onWindowUpRef.current = onWindowUp;
+  onWindowKeyRef.current = onWindowKey;
+  const dragListeners = useMemo(() => {
+    const move = (e: PointerEvent) => onWindowMoveRef.current(e);
+    const up = (e: PointerEvent) => onWindowUpRef.current(e);
+    const key = (e: KeyboardEvent) => onWindowKeyRef.current(e);
+    return {
+      install: () => {
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+        window.addEventListener('pointercancel', up);
+        window.addEventListener('keydown', key);
+      },
+      uninstall: () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+        window.removeEventListener('pointercancel', up);
+        window.removeEventListener('keydown', key);
+      },
+    };
+  }, []);
+
   // Assign the tear-down body now that the handlers it references exist.
   tearDownRef.current = () => {
     dragRef.current = null;
     setDragOffsetMm([0, 0, 0]);
     setCandidateParentId(null);
     if (orbitRef.current) orbitRef.current.enabled = true;
-    window.removeEventListener('pointermove', onWindowMove);
-    window.removeEventListener('pointerup', onWindowUp);
-    window.removeEventListener('pointercancel', onWindowUp);
-    window.removeEventListener('keydown', onWindowKey);
+    dragListeners.uninstall();
     if (useModelStore.getState().catalogDrag) cancelCatalogDrag();
   };
 
@@ -438,27 +474,14 @@ function SceneContents() {
   useEffect(() => {
     if (!catalogDrag) return;
     if (orbitRef.current) orbitRef.current.enabled = false;
-    window.addEventListener('pointermove', onWindowMove);
-    window.addEventListener('pointerup', onWindowUp);
-    window.addEventListener('pointercancel', onWindowUp);
-    window.addEventListener('keydown', onWindowKey);
-    return () => {
-      window.removeEventListener('pointermove', onWindowMove);
-      window.removeEventListener('pointerup', onWindowUp);
-      window.removeEventListener('pointercancel', onWindowUp);
-      window.removeEventListener('keydown', onWindowKey);
-    };
-  }, [catalogDrag, onWindowMove, onWindowUp, onWindowKey]);
+    dragListeners.install();
+    return () => dragListeners.uninstall();
+  }, [catalogDrag, dragListeners]);
 
   // Cleanup any stray listeners on unmount.
   useEffect(() => {
-    return () => {
-      window.removeEventListener('pointermove', onWindowMove);
-      window.removeEventListener('pointerup', onWindowUp);
-      window.removeEventListener('pointercancel', onWindowUp);
-      window.removeEventListener('keydown', onWindowKey);
-    };
-  }, [onWindowMove, onWindowUp, onWindowKey]);
+    return () => dragListeners.uninstall();
+  }, [dragListeners]);
 
   /**
    * Scene-drag arm: pointerdown on a leaf mesh that's part of the current
@@ -496,17 +519,12 @@ function SceneContents() {
       } catch {
         // Some browsers reject capture in certain event states; harmless.
       }
-      window.addEventListener('pointermove', onWindowMove);
-      window.addEventListener('pointerup', onWindowUp);
-      window.addEventListener('pointercancel', onWindowUp);
-      window.addEventListener('keydown', onWindowKey);
+      dragListeners.install();
     },
     [
+      dragListeners,
       gl.domElement,
       isRepairing,
-      onWindowKey,
-      onWindowMove,
-      onWindowUp,
       planeFor,
       planeHitMm,
       query,
