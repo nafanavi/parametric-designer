@@ -104,13 +104,12 @@ describe('position round-trips through standalone geometry', () => {
     }
   });
 
-  it('adopted shelf ignores its standalone position (parent recomputes geometry)', () => {
-    // The shelf's `position` is a top-level convenience; once the cabinet
-    // adopts the shelf, geometry re-runs with cabinet-context and the
-    // adoption position is ignored.
+  it('adopted shelf default position is cabinet-interior centred at input.y', () => {
+    // Without an explicit `position`, the cabinet computes the local
+    // centred placement from `y`.
     const src = `api.cabinet({
       width: 800, height: 1800, depth: 400, thickness: 18, position: [0, 0, 0],
-      children: [api.shelf({ y: 600, position: [9999, 9999, 9999] })],
+      children: [api.shelf({ y: 600 })],
     });`;
     const result = runModel(src);
     expect(result.error).toBeUndefined();
@@ -118,8 +117,24 @@ describe('position round-trips through standalone geometry', () => {
     if (cab.type !== 'cabinet') throw new Error('expected cabinet');
     const shelf = cab.children.find((c) => c.type === 'shelf')!;
     if (shelf.type !== 'shelf') throw new Error('expected shelf');
-    // Shelf position is cabinet-interior, NOT [9999, 9999, 9999].
-    expect(shelf.params.position[1]).toBe(600); // cabinet floor y (0) + input.y (600)
-    expect(shelf.params.position[0]).toBe(0); // cabinet x
+    // Position is cabinet-LOCAL: X centred at 0, Y above floor.
+    expect(shelf.params.position[1]).toBe(600);
+    expect(shelf.params.position[0]).toBe(0);
+  });
+
+  it('adopted shelf honours an explicit cabinet-local position override', () => {
+    // PR-2: an explicit `position` on an adopted child wins over the
+    // default `y`-only placement. The position is cabinet-LOCAL.
+    const src = `api.cabinet({
+      width: 800, height: 1800, depth: 400, thickness: 18, position: [0, 0, 0],
+      children: [api.shelf({ y: 600, position: [50, 700, 30] })],
+    });`;
+    const result = runModel(src);
+    expect(result.error).toBeUndefined();
+    const cab = result.nodes[0];
+    if (cab.type !== 'cabinet') throw new Error('expected cabinet');
+    const shelf = cab.children.find((c) => c.type === 'shelf')!;
+    if (shelf.type !== 'shelf') throw new Error('expected shelf');
+    expect(shelf.params.position).toEqual([50, 700, 30]);
   });
 });

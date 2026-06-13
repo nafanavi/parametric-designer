@@ -1,7 +1,14 @@
 import type { RunResult } from '@/model/runtime';
 import type { SceneNode } from '@/domain/cabinet/types';
-import type { AABB, SolidId, Vec3 } from '@/core/types';
+import type { AABB, Mat4, SolidId, Transform, Vec3 } from '@/core/types';
 import type { SourceRange } from '@/model/ast/types';
+import {
+  IDENTITY_MAT4,
+  compose,
+  fromMat4,
+  toMat4,
+  transformPoint,
+} from '@/core/math/transform';
 
 export interface NodeSummary {
   readonly id: string;
@@ -11,6 +18,7 @@ export interface NodeSummary {
   readonly sourceRange: SourceRange | null;
   readonly parentId: string | null;
   readonly params: Record<string, unknown>;
+  /** World-space axis-aligned bounding box. */
   readonly aabb: AABB;
   readonly center: Vec3;
   readonly size: Vec3;
@@ -33,9 +41,15 @@ const OVERLAP_TOLERANCE_MM = 0.5;
 
 /**
  * Read-only query layer over a `RunResult`. Builds parent + id maps once and
- * aggregates SolidId AABBs from the kernel. Used by the LLM-tools layer in
- * `src/model/llm/tools.ts`, but also fine to use anywhere we need to inspect
- * the current scene.
+ * derives world transforms (and world AABBs) by composing the chain from
+ * each node up to the root. Used by the LLM-tools layer in
+ * `src/model/llm/tools.ts`, drag math in `src/viewer/dragController.ts`,
+ * and the viewport overlay (spinner anchor).
+ *
+ * Frames of reference: each `SceneNode.params.position` and `params.rotation`
+ * is **local to the node's parent**. World transforms are derived here by
+ * walking the parent chain and multiplying matrices. The kernel stores
+ * solids in node-local coords; this layer composes them into world coords.
  *
  * Coordinates are in millimetres throughout — same as the model authoring
  * convention.
@@ -47,6 +61,7 @@ const OVERLAP_TOLERANCE_MM = 0.5;
 export class SceneQuery {
   private readonly byId = new Map<string, SceneNode>();
   private readonly aabbCache = new Map<string, AABB>();
+  private readonly worldMat4Cache = new Map<string, Mat4>();
 
   constructor(private readonly result: RunResult) {
     const walk = (nodes: readonly SceneNode[]) => {
@@ -70,6 +85,55 @@ export class SceneQuery {
 
   parent(id: string): string | null {
     return this.byId.get(id)?.parentId ?? null;
+  }
+
+  /**
+   * World transform of a node — composes parent.localTransform ∘ … ∘
+   * node.localTransform from root downward. Returned as a `Transform` for
+   * consumers that want translation/rotation directly; use `worldMat4(id)`
+   * when you need the matrix (e.g. to apply to local points).
+   */
+  worldTransform(id: string): Transform {
+    return fromMat4(this.worldMat4(id));
+  }
+
+  /**
+   * Projects a world-space point into the node's local frame. Inverts the
+   * node's world matrix and applies it. Useful for adoption math and for
+   * reading "where, in this cabinet's local coordinates, did the drop land?".
+   */
+  worldToLocal(id: string, worldPoint: Vec3): Vec3 {
+    const w = this.worldMat4(id);
+    // Rigid inverse: R^T and -R^T t.
+    const r00 = w[0], r10 = w[1], r20 = w[2];
+    const r01 = w[4], r11 = w[5], r21 = w[6];
+    const r02 = w[8], r12 = w[9], r22 = w[10];
+    const tx = w[12], ty = w[13], tz = w[14];
+    const dx = worldPoint[0] - tx;
+    const dy = worldPoint[1] - ty;
+    const dz = worldPoint[2] - tz;
+    return [
+      r00 * dx + r10 * dy + r20 * dz,
+      r01 * dx + r11 * dy + r21 * dz,
+      r02 * dx + r12 * dy + r22 * dz,
+    ];
+  }
+
+  worldMat4(id: string): Mat4 {
+    const cached = this.worldMat4Cache.get(id);
+    if (cached) return cached;
+    const node = this.byId.get(id);
+    if (!node) return IDENTITY_MAT4;
+    const localMat = toMat4({
+      translation: getPosition(node),
+      rotation: getRotation(node),
+    });
+    const parentId = node.parentId;
+    const worldMat = parentId
+      ? compose(this.worldMat4(parentId), localMat)
+      : localMat;
+    this.worldMat4Cache.set(id, worldMat);
+    return worldMat;
   }
 
   summarize(id: string): NodeSummary | null {
@@ -134,27 +198,36 @@ export class SceneQuery {
     return out;
   }
 
-  /** Bounding box of a node, computed as the union of its (and children's) solid AABBs. */
+  /**
+   * World AABB of a node — union of (own solids + descendants' solids) all
+   * transformed into world coordinates. Computed by walking each owned
+   * solid's local AABB corners through the node's world matrix and
+   * re-bounding.
+   */
   aabbOf(id: string): AABB {
     const cached = this.aabbCache.get(id);
     if (cached) return cached;
     const node = this.byId.get(id);
     if (!node) return EMPTY_AABB;
-    const aabb = unionAABB(this.collectSolidAABBs(node));
+    const aabb = unionAABB(this.collectWorldSolidAABBs(node));
     this.aabbCache.set(id, aabb);
     return aabb;
   }
 
-  private collectSolidAABBs(node: SceneNode): AABB[] {
+  private collectWorldSolidAABBs(node: SceneNode): AABB[] {
     const out: AABB[] = [];
+    const worldMat = this.worldMat4(node.id);
     for (const sid of node.solids) {
-      out.push(this.result.core.snapshot(sid).aabb);
+      const snap = this.result.core.snapshot(sid);
+      // The kernel's snapshot is in node-local coordinates. The solid may
+      // itself have a non-identity `transform` (offset within its node) —
+      // compose that with the node's world matrix to get the solid's world
+      // matrix, then transform its local AABB corners.
+      const solidMat = compose(worldMat, toMat4(snap.transform));
+      out.push(transformLocalAabb(solidMat, snap.aabb));
     }
     for (const child of node.children) {
-      // children's solids are already aggregated into parent.solids in our
-      // current DomainAPI, but recursing makes the query robust if a future
-      // domain stops doing that aggregation.
-      for (const a of this.collectSolidAABBs(child)) out.push(a);
+      for (const a of this.collectWorldSolidAABBs(child)) out.push(a);
     }
     return out;
   }
@@ -163,6 +236,33 @@ export class SceneQuery {
 // ───────────────────────────── helpers ─────────────────────────────
 
 const EMPTY_AABB: AABB = { min: [0, 0, 0], max: [0, 0, 0] };
+
+function getPosition(node: SceneNode): Vec3 {
+  // CabinetNode's params always carry position/rotation; PanelInput's
+  // position is required; others default to ZERO via the geometry builder.
+  const p = (node.params as { position?: Vec3 }).position;
+  return p ?? [0, 0, 0];
+}
+
+function getRotation(node: SceneNode): Vec3 {
+  const r = (node.params as { rotation?: Vec3 }).rotation;
+  return r ?? [0, 0, 0];
+}
+
+function transformLocalAabb(m: Mat4, aabb: AABB): AABB {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let i = 0; i < 8; i++) {
+    const x = (i & 1) ? aabb.max[0] : aabb.min[0];
+    const y = (i & 2) ? aabb.max[1] : aabb.min[1];
+    const z = (i & 4) ? aabb.max[2] : aabb.min[2];
+    const [wx, wy, wz] = transformPoint(m, [x, y, z]);
+    if (wx < minX) minX = wx; if (wx > maxX) maxX = wx;
+    if (wy < minY) minY = wy; if (wy > maxY) maxY = wy;
+    if (wz < minZ) minZ = wz; if (wz > maxZ) maxZ = wz;
+  }
+  return { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] };
+}
 
 function centerOf(a: AABB): Vec3 {
   return [

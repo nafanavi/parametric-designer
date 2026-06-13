@@ -76,16 +76,18 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
 
   // Internal helper: emits one panel solid + the corresponding panel SceneNode.
   // Frame panels share their parent cabinet's sourceRange — they came from
-  // that one call.
+  // that one call. `localCentre` is in the cabinet's local frame; the
+  // panel node stores it directly. Scene-graph composition (cabinet
+  // rotation propagating to its panels) is the viewer's job, not ours.
   function buildPanelChild(
-    parent: SceneNode,
+    parent: SceneNode & { type: 'cabinet' },
     size: Vec3,
-    centre: Vec3,
+    localCentre: Vec3,
     idx: number,
     label: string,
     sourceRange: SourceRange | undefined,
   ): void {
-    const solid = core.box({ size, transform: { translation: centre } });
+    const solid = core.box({ size });
     const node: SceneNode = {
       type: 'panel',
       id: makeId('panel', sourceRange, idx, label),
@@ -95,7 +97,8 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
         width: size[0],
         height: size[1],
         thickness: size[2],
-        position: centre,
+        position: localCentre,
+        rotation: ZERO,
       },
       solids: [solid],
       children: [],
@@ -111,10 +114,11 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       const idx = ctx.nextCall();
       const sourceRange = currentRange();
       const position: Vec3 = input.position ?? ZERO;
-      const params: CabinetParams = { ...input, position };
+      const rotation: Vec3 = input.rotation ?? ZERO;
+      const params: CabinetParams = { ...input, position, rotation };
       const { width: w, height: h, depth: d, thickness: t } = params;
 
-      const node: SceneNode = {
+      const node: SceneNode & { type: 'cabinet' } = {
         type: 'cabinet',
         id: makeId('cabinet', sourceRange, idx),
         callIndex: idx,
@@ -126,13 +130,15 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
       };
       ctx.collect(node);
 
-      const [px, py, pz] = position;
-      // Frame: left, right, top, bottom, back panels.
-      buildPanelChild(node, [t, h, d],          [px - w / 2 + t / 2, py + h / 2, pz],                  idx, 'left',   sourceRange);
-      buildPanelChild(node, [t, h, d],          [px + w / 2 - t / 2, py + h / 2, pz],                  idx, 'right',  sourceRange);
-      buildPanelChild(node, [w, t, d],          [px, py + h - t / 2, pz],                              idx, 'top',    sourceRange);
-      buildPanelChild(node, [w, t, d],          [px, py + t / 2, pz],                                  idx, 'bottom', sourceRange);
-      buildPanelChild(node, [w, h, t],          [px, py + h / 2, pz - d / 2 + t / 2],                  idx, 'back',   sourceRange);
+      // Frame: left, right, top, bottom, back panels. Centres are in
+      // cabinet-local coordinates (cabinet origin = cabinet's `position`),
+      // y measured up from the cabinet floor. The viewer's nested groups
+      // compose the cabinet's own position+rotation on top.
+      buildPanelChild(node, [t, h, d],          [-w / 2 + t / 2, h / 2, 0],                idx, 'left',   sourceRange);
+      buildPanelChild(node, [t, h, d],          [ w / 2 - t / 2, h / 2, 0],                idx, 'right',  sourceRange);
+      buildPanelChild(node, [w, t, d],          [0, h - t / 2, 0],                          idx, 'top',    sourceRange);
+      buildPanelChild(node, [w, t, d],          [0, t / 2, 0],                              idx, 'bottom', sourceRange);
+      buildPanelChild(node, [w, h, t],          [0, h / 2, -d / 2 + t / 2],                 idx, 'back',   sourceRange);
 
       // Adopt explicitly-nested children. These ran first (arguments evaluate
       // left-to-right), registered as top-level, and now get re-parented.
@@ -147,16 +153,18 @@ export function createCabinetAPI(ctx: DomainContext): CabinetAPI {
     panel(input) {
       const idx = ctx.nextCall();
       const sourceRange = currentRange();
+      const rotation = input.rotation ?? ZERO;
+      // Solid is authored at the panel node's origin; the node carries the
+      // panel's local position+rotation (relative to its parent or world).
       const solid = core.box({
         size: [input.width, input.height, input.thickness],
-        transform: { translation: input.position },
       });
       const node: SceneNode = {
         type: 'panel',
         id: makeId('panel', sourceRange, idx),
         callIndex: idx,
         ...(sourceRange ? { sourceRange } : {}),
-        params: input,
+        params: { ...input, rotation },
         solids: [solid],
         children: [],
         parentId: null,

@@ -174,9 +174,9 @@ describe('adopt() re-derives child geometry using parent params', () => {
     expect(shelf.params.width).toBe(800 - 2 * 18);     // 764
     expect(shelf.params.depth).toBe(400 - 18);          // 382
     expect(shelf.params.thickness).toBe(18);
-    // Position is cabinet-position-relative, so y = py + input.y.
-    expect(shelf.params.position[0]).toBe(100);
-    expect(shelf.params.position[1]).toBe(50 + 600);
+    // Position is cabinet-LOCAL (PR-2): X centred at 0, Y above floor.
+    expect(shelf.params.position[0]).toBe(0);
+    expect(shelf.params.position[1]).toBe(600);
   });
 
   it('door inside children inherits interior height and side placement', () => {

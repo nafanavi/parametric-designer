@@ -42,7 +42,7 @@ api.cabinet({
 });
 
 api.cabinet({
-  width: 800, height: 1800, depth: 400, thickness: 18, position: [2000, 0, 0],
+  width: 800, height: 1800, depth: 400, thickness: 18, position: [2000, 0, 0], rotation: [0, 90, 0],
   children: [
     api.shelf({ y: 459 }),
     api.shelf({ y: 900 }),
@@ -51,4 +51,4 @@ api.cabinet({
     api.door({ side: 'right' }),
   ],
 });
-`;
+`
