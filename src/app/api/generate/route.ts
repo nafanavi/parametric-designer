@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
-import { generateText, APICallError } from 'ai';
+import { generateText, stepCountIs, APICallError } from 'ai';
 import { selectProvider, ProviderConfigError } from '@/model/llm/providers';
 import { SYSTEM_PROMPT, buildUserPrompt } from '@/model/llm/prompt';
 import { extractCode } from '@/model/llm/extract';
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
       system: SYSTEM_PROMPT,
       prompt: buildUserPrompt(parsed.data.currentSource, parsed.data.prompt),
       tools,
-      maxSteps: MAX_TOOL_STEPS,
+      stopWhen: stepCountIs(MAX_TOOL_STEPS),
       temperature: 0.2,
       abortSignal: ac.signal,
     });
