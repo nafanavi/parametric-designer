@@ -39,6 +39,14 @@ interface ModelState {
   promptStatus: PromptStatus;
   promptHeight: number;
 
+  /**
+   * Widths (px) of the left and right editor columns. Persist across
+   * renders so a user-resized layout survives state updates. Defaults
+   * match the original fixed grid template.
+   */
+  sourcePanelWidth: number;
+  propertyPanelWidth: number;
+
   /** Right-side catalog sidebar — open/close toggle. */
   catalogOpen: boolean;
   /**
@@ -87,6 +95,8 @@ interface ModelState {
   togglePrompt: () => void;
   setPromptOpen: (open: boolean) => void;
   setPromptHeight: (height: number) => void;
+  setSourcePanelWidth: (width: number) => void;
+  setPropertyPanelWidth: (width: number) => void;
   submitPrompt: (text: string) => Promise<void>;
 
   toggleCatalog: () => void;
@@ -201,6 +211,8 @@ export const useModelStore = create<ModelState>((set, get) => {
   promptOpen: false,
   promptStatus: { kind: 'idle' },
   promptHeight: 240,
+  sourcePanelWidth: 320,
+  propertyPanelWidth: 280,
 
   catalogOpen: false,
   catalogDrag: null,
@@ -278,6 +290,8 @@ export const useModelStore = create<ModelState>((set, get) => {
   togglePrompt: () => set((s) => ({ promptOpen: !s.promptOpen })),
   setPromptOpen: (open) => set({ promptOpen: open }),
   setPromptHeight: (height) => set({ promptHeight: height }),
+  setSourcePanelWidth: (width) => set({ sourcePanelWidth: width }),
+  setPropertyPanelWidth: (width) => set({ propertyPanelWidth: width }),
 
   toggleCatalog: () => set((s) => ({ catalogOpen: !s.catalogOpen })),
   setCatalogOpen: (open) => set({ catalogOpen: open }),

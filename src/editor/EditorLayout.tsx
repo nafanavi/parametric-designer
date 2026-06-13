@@ -8,6 +8,14 @@ import { SourcePanel } from './SourcePanel';
 import { PropertyPanel } from './PropertyPanel';
 import { PromptPanel } from './PromptPanel';
 import { CatalogPanel } from './CatalogPanel';
+import { ResizeHandle } from '@/components/ResizeHandle';
+
+// Minimum column widths in pixels. Below this the panels stop being
+// useful (source code wraps too tightly, property labels truncate).
+const MIN_SOURCE_PANEL_WIDTH = 220;
+const MIN_PROPERTY_PANEL_WIDTH = 220;
+// Reserve at least this much for the viewport between the two side panels.
+const MIN_VIEWPORT_WIDTH = 320;
 
 const Scene = dynamic(() => import('@/viewer/Scene').then((m) => m.Scene), {
   ssr: false,
@@ -22,6 +30,31 @@ export function EditorLayout() {
   const promptOpen = useModelStore((s) => s.promptOpen);
   const catalogOpen = useModelStore((s) => s.catalogOpen);
   const toggleCatalog = useModelStore((s) => s.toggleCatalog);
+  const sourcePanelWidth = useModelStore((s) => s.sourcePanelWidth);
+  const propertyPanelWidth = useModelStore((s) => s.propertyPanelWidth);
+  const setSourcePanelWidth = useModelStore((s) => s.setSourcePanelWidth);
+  const setPropertyPanelWidth = useModelStore((s) => s.setPropertyPanelWidth);
+
+  // Clamp factory: keeps the panel within its own min and leaves enough
+  // room for the viewport + the OTHER panel. We compute the available
+  // window width once per call rather than tracking it in state — resizes
+  // are user-driven and recompute every drag tick anyway.
+  const clampSourceWidth = (proposed: number): number => {
+    const viewport = typeof window !== 'undefined' ? window.innerWidth : 1600;
+    const max = Math.max(
+      MIN_SOURCE_PANEL_WIDTH,
+      viewport - propertyPanelWidth - MIN_VIEWPORT_WIDTH,
+    );
+    return Math.min(max, Math.max(MIN_SOURCE_PANEL_WIDTH, proposed));
+  };
+  const clampPropertyWidth = (proposed: number): number => {
+    const viewport = typeof window !== 'undefined' ? window.innerWidth : 1600;
+    const max = Math.max(
+      MIN_PROPERTY_PANEL_WIDTH,
+      viewport - sourcePanelWidth - MIN_VIEWPORT_WIDTH,
+    );
+    return Math.min(max, Math.max(MIN_PROPERTY_PANEL_WIDTH, proposed));
+  };
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -75,23 +108,50 @@ export function EditorLayout() {
 
       <ActionToolbar />
 
-      <main
-        className="grid flex-1 min-h-0"
-        style={{ gridTemplateColumns: '320px 1fr 280px' }}
-      >
-        <div className="flex flex-col min-h-0 border-r border-border">
+      <main className="flex flex-1 min-h-0">
+        {/* Left column: source + (optional) prompt panel. */}
+        <div
+          className="flex flex-col min-h-0 shrink-0"
+          style={{ width: sourcePanelWidth }}
+        >
           <div className="flex-1 min-h-0">
             <SourcePanel />
           </div>
           {promptOpen && <PromptPanel />}
         </div>
-        <div className="relative min-h-0 min-w-0 overflow-hidden">
+
+        <ResizeHandle
+          orientation="vertical"
+          size={sourcePanelWidth}
+          onResize={(next) => setSourcePanelWidth(clampSourceWidth(next))}
+          ariaLabel="Resize source panel"
+        />
+
+        {/* Viewport — fills remaining space. */}
+        <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden">
           <Scene />
         </div>
+
+        {/* The right column's resize handle sits on the column's LEFT edge,
+            so dragging RIGHT shrinks the panel (direction: -1). */}
+        <ResizeHandle
+          orientation="vertical"
+          size={propertyPanelWidth}
+          direction={-1}
+          onResize={(next) => setPropertyPanelWidth(clampPropertyWidth(next))}
+          ariaLabel="Resize property panel"
+        />
+
         {/* PropertyPanel and CatalogPanel share the right column. When the
             catalog is open it overlays the property panel; no layout shift,
-            and closing the catalog reveals the panel underneath unchanged. */}
-        <div className="relative min-h-0">
+            and closing the catalog reveals the panel underneath unchanged.
+            While open, the catalog absorbs pointer events on its inset-0
+            overlay, so the resize handle is effectively disabled — that's
+            acceptable: the catalog is a modal sidebar state. */}
+        <div
+          className="relative min-h-0 shrink-0"
+          style={{ width: propertyPanelWidth }}
+        >
           <PropertyPanel />
           {catalogOpen && (
             <div className="absolute inset-0 z-10">
