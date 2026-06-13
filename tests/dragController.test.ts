@@ -31,7 +31,10 @@ describe('getDragSpec', () => {
     expect(spec).not.toBeNull();
     expect(spec!.axes).toEqual({ x: true, y: false, z: true });
     expect(spec!.yBounds).toBeNull();
-    expect(spec!.write).toEqual({ kind: 'positionArray', originalY: 0 });
+    expect(spec!.write.kind).toBe('positionArray');
+    if (spec!.write.kind === 'positionArray') {
+      expect(spec!.write.originalLocal).toEqual([100, 0, 200]);
+    }
     expect(spec!.originalWorld).toEqual([100, 0, 200]);
   });
 
@@ -48,8 +51,10 @@ describe('getDragSpec', () => {
     // Interior: thickness + half-thickness = 27 .. height - thickness - half = 1773
     expect(spec!.yBounds).toEqual({ min: 27, max: 1773 });
     expect(spec!.write.kind).toBe('yScalar');
+    // For an unrotated cabinet at y=0, parentInverseWorld is identity-
+    // translation-only — projecting (0, worldY, 0) yields (0, worldY, 0).
     if (spec!.write.kind === 'yScalar') {
-      expect(spec!.write.parentFloorY).toBe(0); // cabinet sits at y=0
+      expect(spec!.write.parentInverseWorld).toHaveLength(16);
     }
   });
 
@@ -81,7 +86,10 @@ describe('getDragSpec', () => {
     const spec = getDragSpec(panel, queryOf(result));
     expect(spec).not.toBeNull();
     expect(spec!.axes).toEqual({ x: true, y: true, z: true });
-    expect(spec!.write).toEqual({ kind: 'positionArray', originalY: 100 });
+    expect(spec!.write.kind).toBe('positionArray');
+    if (spec!.write.kind === 'positionArray') {
+      expect(spec!.write.originalLocal).toEqual([50, 100, 150]);
+    }
   });
 
   it('top-level shelf/drawer/door are XYZ-draggable (they carry optional position)', () => {

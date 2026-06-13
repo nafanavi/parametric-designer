@@ -19,6 +19,7 @@ import {
 } from './dragController';
 import { CATALOG_ITEMS, type CatalogItem } from '@/editor/catalog';
 import type { SceneNode } from '@/domain/cabinet/types';
+import { transformPoint } from '@/core/math/transform';
 
 const MM_PER_UNIT = 1000; // scene group is scaled 0.001 (mm → metres)
 
@@ -241,25 +242,59 @@ function SceneContents() {
         drag.spec.axes.z ? dz : 0,
       ];
       // Hard-clamp Y for in-cabinet shelves so the user feels the walls.
+      // Project the proposed WORLD point into cabinet-local Y via the
+      // parent inverse matrix, clamp local Y, then re-emit the world
+      // offset as `dLocalY * (cabinet's local Y axis in world)`. For a
+      // Z-rotated cabinet that axis is still world-Y; for arbitrary
+      // rotations the dragged shelf slides along the cabinet's tilted
+      // local Y, matching what the user sees.
       if (drag.spec.write.kind === 'yScalar' && drag.spec.yBounds) {
-        const baseLocalY =
-          drag.spec.originalWorld[1] - drag.spec.write.parentFloorY;
-        const proposedLocalY = baseLocalY + dy;
+        const proposedWorld: [number, number, number] = [
+          drag.spec.originalWorld[0] + next[0],
+          drag.spec.originalWorld[1] + next[1],
+          drag.spec.originalWorld[2] + next[2],
+        ];
+        const proposedLocal = transformPoint(
+          drag.spec.write.parentInverseWorld,
+          proposedWorld,
+        );
+        const originalLocal = transformPoint(
+          drag.spec.write.parentInverseWorld,
+          drag.spec.originalWorld,
+        );
         const clampedLocalY = Math.max(
           drag.spec.yBounds.min,
-          Math.min(drag.spec.yBounds.max, proposedLocalY),
+          Math.min(drag.spec.yBounds.max, proposedLocal[1]),
         );
-        next[1] = clampedLocalY - baseLocalY;
+        const dLocalY = clampedLocalY - originalLocal[1];
+        // Rigid inverse layout: rows of parentInverseWorld's 3x3 are the
+        // columns of the forward parent matrix's rotation. The cabinet's
+        // local +Y axis in world is therefore the SECOND ROW of the
+        // inverse — entries [1], [5], [9] in column-major.
+        const parentInv = drag.spec.write.parentInverseWorld;
+        const localYAxisWorld: [number, number, number] = [
+          parentInv[1],
+          parentInv[5],
+          parentInv[9],
+        ];
+        next[0] = dLocalY * localYAxisWorld[0];
+        next[1] = dLocalY * localYAxisWorld[1];
+        next[2] = dLocalY * localYAxisWorld[2];
       }
 
       // Adoption preview for free-floating drags of adoptable parts. When
       // the cursor enters a cabinet's footprint, snap the visual to the
       // interior centre + Y bounds so the user previews the adoption.
+      // Only top-level (un-adopted) parts can be re-parented — dragging an
+      // already-adopted shelf is repositioning within its existing cabinet,
+      // not a re-parenting flow.
       let candidateId: string | null = null;
       if (drag.spec.write.kind === 'positionArray') {
         const owner = query.getNode(drag.ownerId);
         const adoptable =
-          owner?.type === 'shelf' || owner?.type === 'door' || owner?.type === 'drawer';
+          owner !== null &&
+          owner.parentId === null &&
+          (owner.type === 'shelf' || owner.type === 'door' || owner.type === 'drawer');
         if (adoptable) {
           raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
           const ro = raycaster.ray.origin;
@@ -275,7 +310,7 @@ function SceneContents() {
             const cab = query.getNode(hit.id);
             if (cab && cab.type === 'cabinet') {
               candidateId = hit.id;
-              const snapped = snapToCabinetInterior(cab, hit.entryY);
+              const snapped = snapToCabinetInterior(cab, query, hit.entryY);
               next[0] = snapped[0] - drag.spec.originalWorld[0];
               next[1] = snapped[1] - drag.spec.originalWorld[1];
               next[2] = snapped[2] - drag.spec.originalWorld[2];
@@ -342,18 +377,11 @@ function SceneContents() {
           const halfT = cab.params.thickness / 2;
           const interiorYMin = cab.params.thickness + halfT;
           const interiorYMax = cab.params.height - cab.params.thickness - halfT;
-          // For a rotated cabinet, world Y minus cabinet position Y isn't
-          // a cabinet-local y. Park the adopted child at mid-height for
-          // PR-1 — proper local-space drop math arrives with PR-2.
-          const [rx, ry, rz] = cab.params.rotation;
-          const cabIsRotated =
-            Math.abs(rx) > 1e-6 || Math.abs(ry) > 1e-6 || Math.abs(rz) > 1e-6;
-          const cabRelY = cabIsRotated
-            ? (interiorYMin + interiorYMax) / 2
-            : Math.max(
-                interiorYMin,
-                Math.min(interiorYMax, proposed[1] - cab.params.position[1]),
-              );
+          // Read the cabinet-local Y of the drop point by projecting the
+          // proposed world position through the cabinet's inverse world
+          // matrix — works regardless of cabinet rotation.
+          const cabLocal = query.worldToLocal(cab.id, [proposed[0], proposed[1], proposed[2]]);
+          const cabRelY = Math.max(interiorYMin, Math.min(interiorYMax, cabLocal[1]));
           const snippet = snippetForAdoption(owner, cabRelY);
           if (snippet) {
             void moveSelectionIntoCabinet(dropParentId, snippet);
@@ -489,19 +517,46 @@ function SceneContents() {
   );
 
   // Render mirrors the SceneNode tree: one `<group>` per node, recursing
-  // through `children`. The drag-owner's group carries the transient
-  // offset; descendants ride along through `matrixWorld` composition.
+  // through `children`. Each group carries the node's LOCAL transform
+  // (position + rotation relative to its parent); Three.js's `matrixWorld`
+  // composes the chain. The drag-owner's group adds a transient offset on
+  // top of its local position so the drag preview is in cabinet-local
+  // coordinates — same frame as the source write.
+  //
+  // Adoption preview: while the drag is hovering over a candidate parent
+  // cabinet, swap the drag owner's rotation for that cabinet's world
+  // rotation. The drag owner is a top-level node (local frame == world),
+  // so we can just substitute. This is purely visual — the source write
+  // strips standalone `rotation` on adoption anyway.
+  const DEG = Math.PI / 180;
   const dragOwnerId = dragRef.current?.ownerId ?? null;
+  const previewRotation: readonly [number, number, number] | null =
+    dragOwnerId && candidateParentId
+      ? query.worldTransform(candidateParentId).rotation
+      : null;
   const renderNode = (node: SceneNode): React.ReactElement => {
     const isDragOwner = node.id === dragOwnerId;
+    const params = node.params as { position?: readonly [number, number, number]; rotation?: readonly [number, number, number] };
+    const localPos: readonly [number, number, number] = params.position ?? [0, 0, 0];
+    const localRot: readonly [number, number, number] =
+      isDragOwner && previewRotation ? previewRotation : (params.rotation ?? [0, 0, 0]);
     const groupPos: [number, number, number] = isDragOwner
-      ? [dragOffsetMm[0], dragOffsetMm[1], dragOffsetMm[2]]
-      : [0, 0, 0];
+      ? [
+          localPos[0] + dragOffsetMm[0],
+          localPos[1] + dragOffsetMm[1],
+          localPos[2] + dragOffsetMm[2],
+        ]
+      : [localPos[0], localPos[1], localPos[2]];
+    const groupRot: [number, number, number] = [
+      localRot[0] * DEG,
+      localRot[1] * DEG,
+      localRot[2] * DEG,
+    ];
     const owner = promoteToConceptualOwner(node.id, result);
     const isSelected = selection !== null && owner === selection;
     const isDropTarget = candidateParentId !== null && owner === candidateParentId;
     return (
-      <group key={node.id} position={groupPos}>
+      <group key={node.id} position={groupPos} rotation={groupRot}>
         {node.solids.map((solidId) => {
           const snap = result.core.snapshot(solidId);
           return (

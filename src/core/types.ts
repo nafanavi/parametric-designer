@@ -42,6 +42,20 @@ export interface TriangleMesh {
   readonly normals: Float32Array;
 }
 
+/**
+ * Snapshot of a single solid, in **node-local** coordinates. The kernel
+ * knows nothing about the scene-graph hierarchy — it returns the solid's
+ * placement relative to whichever SceneNode owns it. Composing world
+ * transforms is the SceneQuery's / viewer's job (walk parents, multiply
+ * matrices).
+ *
+ *   - `transform`: solid's placement within its owning SceneNode's frame.
+ *     Usually identity for nodes that own a single solid drawn at the
+ *     node's origin; non-identity for cabinets that emit multiple frame-
+ *     panel solids at different offsets.
+ *   - `aabb`: bounding box of the meshed solid in the SAME frame as
+ *     `transform` (i.e. node-local). The world AABB is derived elsewhere.
+ */
 export interface SolidSnapshot {
   readonly id: SolidId;
   readonly mesh: TriangleMesh;

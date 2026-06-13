@@ -15,19 +15,19 @@
  *      node. The node's `params` and `solids` fields are replaced in
  *      place with the parent-relative result.
  *
- * Keeping the standalone and adopted math in one place means a future
- * tweak (e.g. inset semantics, hinge offset) lands in exactly one spot.
+ * Frames of reference (PR-2): every stored `params.position` is **local
+ * to the node's parent** — cabinet-local for adopted children, world for
+ * top-level nodes. Scene-graph composition (cabinet rotation propagating
+ * to its children) happens in the viewer / SceneQuery, not here. The
+ * kernel solid is authored in the node's own local frame.
  *
- * Rotation handling: a cabinet's rotation propagates to its adopted
- * children. The child's *local* centre (in the cabinet's interior frame)
- * is computed first, then rotated by the cabinet's rotation and offset
- * by the cabinet's position to produce the world centre. The child stores
- * the cabinet's rotation so its solid renders aligned with the cabinet.
- * Standalone (un-adopted) children use their own `rotation` field.
+ * Authoring override (PR-2): adopted children accept an explicit
+ * `input.position: [x, y, z]` (cabinet-local). When present, that wins
+ * over the per-type defaults; the `y`/`inset`/etc. fields are still
+ * honoured as fallbacks so legacy sources keep working.
  */
 
 import type { CoreAPI } from '@/core/api';
-import { applyToLocalPoint } from '@/core/math/transform';
 import type { SolidId, Vec3 } from '@/core/types';
 import type {
   CabinetParams,
@@ -46,26 +46,6 @@ export interface GeometryResult<P> {
 
 const ZERO: Vec3 = [0, 0, 0];
 
-/**
- * Place a child centre inside a (possibly rotated) cabinet. `localCentre`
- * is in cabinet-local coordinates with the cabinet's origin at its
- * `position`; the result is in world space.
- */
-function placeInCabinet(parent: CabinetParams, localCentre: Vec3): Vec3 {
-  // `localCentre` is given relative to the cabinet's `position` already
-  // (the per-type math below was previously written that way) — so apply
-  // rotation around the cabinet origin, then translate to world.
-  const offsetFromCabinet: Vec3 = [
-    localCentre[0] - parent.position[0],
-    localCentre[1] - parent.position[1],
-    localCentre[2] - parent.position[2],
-  ];
-  return applyToLocalPoint(
-    { translation: parent.position, rotation: parent.rotation },
-    offsetFromCabinet,
-  );
-}
-
 export function shelfGeometry(
   core: CoreAPI,
   input: ShelfInput,
@@ -75,41 +55,44 @@ export function shelfGeometry(
   let width: number;
   let depth: number;
   let thickness: number;
-  let centre: Vec3;
+  let localCentre: Vec3;
   let rotation: Vec3;
 
   if (parent) {
-    const [px, py, pz] = parent.position;
     // Interior dimensions: subtract frame thickness on each side.
     width = parent.width - 2 * parent.thickness;
     depth = parent.depth - parent.thickness - inset;
     thickness = parent.thickness;
-    const localCentre: Vec3 = [
-      px,
-      py + input.y,
-      pz + parent.thickness / 2 - inset / 2,
-    ];
-    centre = placeInCabinet(parent, localCentre);
-    rotation = parent.rotation;
+    if (input.position) {
+      localCentre = input.position;
+    } else {
+      // Default: centred on the cabinet's interior X/Z, at the user's `y`
+      // above the cabinet floor. Cabinet's local origin is its `position`
+      // — i.e. the floor under the cabinet's centre.
+      localCentre = [0, input.y, parent.thickness / 2 - inset / 2];
+    }
+    // Adopted children align with the cabinet — identity rotation in the
+    // cabinet's local frame. Standalone rotation is dropped on adoption.
+    rotation = ZERO;
   } else {
-    // Free-floating defaults. When `input.position` is set (catalog drop),
-    // the world position from source wins; otherwise we anchor at
-    // [0, input.y, 0] for the historical authoring shape `api.shelf({ y })`.
-    // Either way the geometry is re-derived as soon as the shelf is
-    // adopted into a cabinet.
+    // Free-floating defaults. `input.position` is world-Y when present;
+    // otherwise we anchor at [0, input.y, 0] for the legacy authoring
+    // shape `api.shelf({ y })`.
     width = 600;
     depth = 300 - inset;
     thickness = 18;
-    centre = input.position ?? [0, input.y, 0];
+    localCentre = input.position ?? [0, input.y, 0];
     rotation = input.rotation ?? ZERO;
   }
 
+  // Solid is authored in the node's own local frame: the shelf node sits
+  // at `localCentre` (within its parent), and the shelf box is at the
+  // shelf node's origin — so the box's local transform is identity.
   const solid = core.box({
     size: [width, thickness, depth],
-    transform: { translation: centre, rotation },
   });
   return {
-    params: { width, depth, thickness, position: centre, rotation },
+    params: { width, depth, thickness, position: localCentre, rotation },
     solid,
   };
 }
@@ -124,28 +107,29 @@ export function doorGeometry(
   let width: number;
   let height: number;
   let thickness: number;
-  let centre: Vec3;
+  let localCentre: Vec3;
   let rotation: Vec3;
 
   if (parent) {
-    const [px, py, pz] = parent.position;
     height = parent.height - 2 * parent.thickness - 2;   // 1mm clearance top/bottom
     thickness = parent.thickness;
-    const doorY = py + parent.height / 2;
-    const doorZ = pz + parent.depth / 2 + parent.thickness / 2;
-    let localCentre: Vec3;
-    if (input.side === 'full') {
+    const doorY = parent.height / 2;
+    const doorZ = parent.depth / 2 + parent.thickness / 2;
+    if (input.position) {
+      // Explicit local position wins; width comes from `side`.
+      width = input.side === 'full' ? parent.width - 2 : parent.width / 2 - 2;
+      localCentre = input.position;
+    } else if (input.side === 'full') {
       width = parent.width - 2;
-      localCentre = [px, doorY, doorZ];
+      localCentre = [0, doorY, doorZ];
     } else if (input.side === 'left') {
       width = parent.width / 2 - 2;
-      localCentre = [px - parent.width / 4, doorY, doorZ];
+      localCentre = [-parent.width / 4, doorY, doorZ];
     } else {
       width = parent.width / 2 - 2;
-      localCentre = [px + parent.width / 4, doorY, doorZ];
+      localCentre = [parent.width / 4, doorY, doorZ];
     }
-    centre = placeInCabinet(parent, localCentre);
-    rotation = parent.rotation;
+    rotation = ZERO;
   } else {
     // Free-floating door — full-size defaults, anchored at `input.position`
     // when present (catalog drop) and otherwise at world origin so the
@@ -153,16 +137,15 @@ export function doorGeometry(
     width = input.side === 'full' ? 798 : 398;
     height = 1798;
     thickness = 18;
-    centre = input.position ?? [0, height / 2, 0];
+    localCentre = input.position ?? [0, height / 2, 0];
     rotation = input.rotation ?? ZERO;
   }
 
   const solid = core.box({
     size: [width, height, thickness],
-    transform: { translation: centre, rotation },
   });
   return {
-    params: { width, height, thickness, position: centre, rotation, hinge, side: input.side },
+    params: { width, height, thickness, position: localCentre, rotation, hinge, side: input.side },
     solid,
   };
 }
@@ -174,33 +157,30 @@ export function drawerGeometry(
 ): GeometryResult<DrawerParams> {
   let width: number;
   let depth: number;
-  let centre: Vec3;
+  let localCentre: Vec3;
   let rotation: Vec3;
 
   if (parent) {
-    const [px, py, pz] = parent.position;
     width = parent.width - 2 * parent.thickness - 4;     // small clearance
     depth = parent.depth - parent.thickness;
-    const localCentre: Vec3 = [
-      px,
-      py + input.y + input.height / 2,
-      pz + parent.thickness / 2,
-    ];
-    centre = placeInCabinet(parent, localCentre);
-    rotation = parent.rotation;
+    if (input.position) {
+      localCentre = input.position;
+    } else {
+      localCentre = [0, input.y + input.height / 2, parent.thickness / 2];
+    }
+    rotation = ZERO;
   } else {
     width = 400;
     depth = 300;
-    centre = input.position ?? [0, input.y + input.height / 2, 0];
+    localCentre = input.position ?? [0, input.y + input.height / 2, 0];
     rotation = input.rotation ?? ZERO;
   }
 
   const solid = core.box({
     size: [width, input.height, depth],
-    transform: { translation: centre, rotation },
   });
   return {
-    params: { width, height: input.height, depth, position: centre, rotation },
+    params: { width, height: input.height, depth, position: localCentre, rotation },
     solid,
   };
 }

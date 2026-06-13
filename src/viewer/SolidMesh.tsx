@@ -48,6 +48,9 @@ export function SolidMesh({ snapshot, selected, dropTarget, nodeType, onPointerD
 
   useEffect(() => () => geometry.dispose(), [geometry]);
 
+  // The snapshot's transform is the solid's offset within its owning
+  // SceneNode. The node's own local transform is applied one level up by
+  // the parent <group>; world composition is everything-above.
   const [tx, ty, tz] = snapshot.transform.translation;
   const [rxDeg, ryDeg, rzDeg] = snapshot.transform.rotation;
   // Three.js uses radians and defaults to 'XYZ' intrinsic Euler order, which

@@ -128,15 +128,17 @@ export interface ShelfInput {
   /**
    * Height in millimetres. Cabinet-floor-relative when the shelf is adopted
    * into a cabinet via `children: [...]`; world-Y when the shelf is
-   * top-level (free-floating, e.g. dropped from a palette).
+   * top-level (free-floating, e.g. dropped from a palette). Ignored when
+   * `position` is also provided.
    */
   readonly y: number;
   /** Optional gap from the front edge. Defaults to 0. */
   readonly inset?: number;
   /**
-   * Optional world position for top-level (un-adopted) use, e.g. when
-   * dropped from the catalog. Ignored once the node is adopted by a
-   * cabinet — adoption recomputes geometry against the parent's interior.
+   * Optional position. **Cabinet-local** when adopted (overrides the
+   * default centred-on-interior placement); **world** when top-level
+   * (catalog drop). When set, `y` is ignored — the position carries the
+   * full [x, y, z].
    */
   readonly position?: Vec3;
   /** Optional rotation for top-level use. Dropped on adoption. */
@@ -149,8 +151,9 @@ export interface DoorInput {
   /** Optional hinge override; defaults to `side === 'right' ? 'right' : 'left'`. */
   readonly hinge?: 'left' | 'right';
   /**
-   * Optional world position for top-level (un-adopted) use. Ignored when
-   * adopted by a cabinet.
+   * Optional position. **Cabinet-local** when adopted (overrides default
+   * side placement); **world** when top-level. Door width still comes
+   * from `side`.
    */
   readonly position?: Vec3;
   /** Optional rotation for top-level use. Dropped on adoption. */
@@ -161,13 +164,14 @@ export interface DrawerInput {
   /**
    * Height in millimetres. Cabinet-floor-relative when the drawer is
    * adopted into a cabinet via `children: [...]`; world-Y when top-level.
+   * Ignored when `position` is also provided.
    */
   readonly y: number;
   /** Vertical span of the drawer. */
   readonly height: number;
   /**
-   * Optional world position for top-level (un-adopted) use. Ignored when
-   * adopted by a cabinet.
+   * Optional position. **Cabinet-local** when adopted (overrides default
+   * placement); **world** when top-level.
    */
   readonly position?: Vec3;
   /** Optional rotation for top-level use. Dropped on adoption. */

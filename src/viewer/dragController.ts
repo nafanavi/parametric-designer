@@ -6,9 +6,11 @@
  * on?", "what's the clamp for inside-a-cabinet shelf y?", and "given a
  * world position, what property + value goes back into the source?".
  *
- * Keeping it pure means the rules are unit-testable and adding a new
- * vertical (drawer in a kitchen carcass, panel in a wardrobe) is a local
- * change — no viewport edits required.
+ * Frames of reference (PR-2): every SceneNode's `params.position` is
+ * **local to its parent**. The pointer math runs in world space (where
+ * the cursor is), but the value written back to source is in the parent's
+ * local frame. Conversion happens at the project step via the parent's
+ * inverse world matrix.
  */
 
 import type {
@@ -18,16 +20,13 @@ import type {
   ShelfInput,
 } from '@/domain/cabinet/types';
 import type { SceneQuery } from '@/model/scene/query';
-import type { Vec3 } from '@/core/types';
-
-const ROT_EPS = 1e-6;
-function isRotated(rotation: Vec3): boolean {
-  return (
-    Math.abs(rotation[0]) > ROT_EPS ||
-    Math.abs(rotation[1]) > ROT_EPS ||
-    Math.abs(rotation[2]) > ROT_EPS
-  );
-}
+import type { Mat4, Vec3 } from '@/core/types';
+import {
+  IDENTITY_MAT4,
+  compose,
+  toMat4,
+  transformPoint,
+} from '@/core/math/transform';
 
 export interface DragAxes {
   readonly x: boolean;
@@ -41,14 +40,31 @@ export interface YBounds {
 }
 
 /**
- * What the source rewrite looks like when the drag commits. The Scene
- * computes a world position; this tells it which property name carries the
- * update and how to project the world coords into the property's storage
- * convention (e.g. cabinet-floor-relative `y`, or world `[x, y, z]`).
+ * What the source rewrite looks like when the drag commits. Two shapes:
+ *   - `positionArray`: write `position: [lx, ly, lz]` in the parent's
+ *     local frame. Used for cabinets (parent=world), top-level parts.
+ *     Carries the originalLocal so disabled-axis values get preserved.
+ *   - `yScalar`: write a single `y: ...` literal, parent-local Y.
+ *     Used for in-cabinet shelf/drawer drags — matches the authoring
+ *     shape `api.shelf({ y })`. Works for rotated cabinets too: we
+ *     project the proposed world point through `parentInverseWorld`
+ *     and take its Y component.
  */
 export type DragWrite =
-  | { readonly kind: 'positionArray'; readonly originalY: number }
-  | { readonly kind: 'yScalar'; readonly parentFloorY: number };
+  | {
+      readonly kind: 'positionArray';
+      readonly originalLocal: Vec3;
+      /**
+       * Parent's inverse world matrix. Projects a proposed world point
+       * into the parent's local frame. Identity for top-level nodes.
+       */
+      readonly parentInverseWorld: Mat4;
+    }
+  | {
+      readonly kind: 'yScalar';
+      /** Parent's inverse world matrix — projects world Y into cabinet-local Y. */
+      readonly parentInverseWorld: Mat4;
+    };
 
 export interface DragSpec {
   readonly axes: DragAxes;
@@ -56,19 +72,21 @@ export interface DragSpec {
   readonly yBounds: YBounds | null;
   readonly write: DragWrite;
   /** Original world position of the node's centre, used as the drag pivot. */
-  readonly originalWorld: readonly [number, number, number];
+  readonly originalWorld: Vec3;
 }
 
 const NO_DRAG = null;
+const ZERO: Vec3 = [0, 0, 0];
 
 /**
  * Returns the drag rules for `node` given the current scene, or null when
- * the node isn't draggable in this PR's scope:
- *   - door (any parent)
- *   - top-level shelf / drawer (their input shape has no x/z fields, so
- *     a world drag can't round-trip through source today)
+ * the node isn't draggable.
  */
 export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null {
+  const world = query.worldTransform(node.id).translation;
+  const parentInverseWorld = parentInverseWorldOf(node, query);
+  const localPos = (node.params as { position?: Vec3 }).position ?? ZERO;
+
   switch (node.type) {
     case 'cabinet': {
       // Top-level only (cabinets are never adopted today, but be explicit).
@@ -76,60 +94,46 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
       return {
         axes: { x: true, y: false, z: true },
         yBounds: null,
-        write: { kind: 'positionArray', originalY: node.params.position[1] },
-        originalWorld: node.params.position,
+        write: { kind: 'positionArray', originalLocal: localPos, parentInverseWorld },
+        originalWorld: world,
       };
     }
     case 'panel': {
-      // Standalone panel (has `position` in input). Frame panels of a
-      // cabinet share their cabinet's sourceRange and are promoted away
-      // by the click handler — they never end up as the selection.
       if (node.parentId !== null) return NO_DRAG;
       return {
         axes: { x: true, y: true, z: true },
         yBounds: null,
-        write: { kind: 'positionArray', originalY: node.params.position[1] },
-        originalWorld: node.params.position,
+        write: { kind: 'positionArray', originalLocal: localPos, parentInverseWorld },
+        originalWorld: world,
       };
     }
     case 'shelf':
     case 'drawer': {
       if (node.parentId === null) {
-        // Top-level (catalog drop or hand-authored standalone). The input
-        // type carries an optional `position`, so the part has world
-        // coordinates we can round-trip through source as an array literal.
         return {
           axes: { x: true, y: true, z: true },
           yBounds: null,
-          write: { kind: 'positionArray', originalY: node.params.position[1] },
-          originalWorld: node.params.position,
+          write: { kind: 'positionArray', originalLocal: localPos, parentInverseWorld },
+          originalWorld: world,
         };
       }
       const parent = query.getNode(node.parentId);
       if (!parent || parent.type !== 'cabinet') return NO_DRAG;
-      // PR-1 limitation: in-cabinet shelf/drawer drag uses a world-axis Y
-      // plane and writes a cabinet-local `y` by subtracting world floor Y.
-      // That math is wrong once the cabinet rotates — the cabinet's local Y
-      // no longer points along world Y. Block the drag until PR-2 introduces
-      // proper local-space drags.
-      if (isRotated(parent.params.rotation)) return NO_DRAG;
       const cab = parent.params;
-      // Interior y bounds in the SAME frame as the shelf's `input.y`
-      // (cabinet-floor-relative). Half a thickness of clearance from the
-      // top/bottom panels — keeps the shelf inside the inner volume.
+      // Interior y bounds in cabinet-local frame.
       const halfT = cab.thickness / 2;
       const yBounds: YBounds = {
         min: cab.thickness + halfT,
         max: cab.height - cab.thickness - halfT,
       };
+      // Y-only drag inside the cabinet. The source shape stays
+      // `api.shelf({ y })` — `parentInverseWorld` projects the world
+      // drag point into cabinet-local Y, so rotated cabinets work too.
       return {
         axes: { x: false, y: true, z: false },
         yBounds,
-        write: {
-          kind: 'yScalar',
-          parentFloorY: cab.position[1],
-        },
-        originalWorld: node.params.position,
+        write: { kind: 'yScalar', parentInverseWorld },
+        originalWorld: world,
       };
     }
     case 'door': {
@@ -137,13 +141,62 @@ export function getDragSpec(node: SceneNode, query: SceneQuery): DragSpec | null
         return {
           axes: { x: true, y: true, z: true },
           yBounds: null,
-          write: { kind: 'positionArray', originalY: node.params.position[1] },
-          originalWorld: node.params.position,
+          write: { kind: 'positionArray', originalLocal: localPos, parentInverseWorld },
+          originalWorld: world,
         };
       }
       return NO_DRAG;
     }
   }
+}
+
+/**
+ * Inverse world matrix of a node's parent. Used to project a world-space
+ * drag result into the parent's local frame for source writes. Returns
+ * identity for top-level nodes.
+ */
+function parentInverseWorldOf(node: SceneNode, query: SceneQuery): Mat4 {
+  if (node.parentId === null) return IDENTITY_MAT4;
+  const parent = query.getNode(node.parentId);
+  if (!parent) return IDENTITY_MAT4;
+  // Parent transform is pure rotation+translation (no scale/shear), so the
+  // inverse is rotation-transpose + back-translated origin. We invert by
+  // composing the inverses of each parent step from the parent down to
+  // root: parent.local^-1 ∘ parent.parent.local^-1 ∘ … In matrix terms,
+  // inv(A∘B∘C) = C^-1∘B^-1∘A^-1. We build it directly from the chain.
+  let inv: Mat4 = IDENTITY_MAT4;
+  let cur: SceneNode | null = parent;
+  while (cur) {
+    const localPos = (cur.params as { position?: Vec3 }).position ?? ZERO;
+    const localRot = (cur.params as { rotation?: Vec3 }).rotation ?? ZERO;
+    const stepInv = invertRigid(toMat4({ translation: localPos, rotation: localRot }));
+    inv = compose(stepInv, inv);
+    cur = cur.parentId ? query.getNode(cur.parentId) : null;
+  }
+  return inv;
+}
+
+/** Inverse of a rigid transform (rotation + translation, no scale). */
+function invertRigid(m: Mat4): Mat4 {
+  // Rotation part is the upper-left 3x3; transpose it.
+  // Translation: -R^T * t
+  const r00 = m[0], r10 = m[1], r20 = m[2];
+  const r01 = m[4], r11 = m[5], r21 = m[6];
+  const r02 = m[8], r12 = m[9], r22 = m[10];
+  const tx = m[12], ty = m[13], tz = m[14];
+  // Transposed rotation:
+  // [ r00 r10 r20 ]
+  // [ r01 r11 r21 ]
+  // [ r02 r12 r22 ]
+  const itx = -(r00 * tx + r10 * ty + r20 * tz);
+  const ity = -(r01 * tx + r11 * ty + r21 * tz);
+  const itz = -(r02 * tx + r12 * ty + r22 * tz);
+  return [
+    r00, r01, r02, 0,
+    r10, r11, r12, 0,
+    r20, r21, r22, 0,
+    itx, ity, itz, 1,
+  ];
 }
 
 export interface CabinetRayHit {
@@ -154,15 +207,7 @@ export interface CabinetRayHit {
 
 /**
  * Top-level cabinet whose AABB the ray hits first (smallest entry t).
- * `origin` in mm, `dir` in any units (sign matters, magnitude doesn't).
- * `excludeId` skips a node from the test. Returns the cab id plus the
- * world Y where the ray pierces it, so callers can track the cursor's
- * vertical position over the cabinet during a drag.
- *
- * Uses the SceneQuery's aggregated AABB (which composes the kernel's
- * rotation-aware per-solid AABBs), so a rotated cabinet is hit-tested
- * against its loose world AABB rather than a stale axis-aligned one
- * derived from `width/depth`.
+ * Uses the SceneQuery's world AABB (rotation-aware).
  */
 export function findCabinetUnderRay(
   result: { readonly nodes: readonly SceneNode[] },
@@ -176,10 +221,6 @@ export function findCabinetUnderRay(
   for (const node of result.nodes) {
     if (node.type !== 'cabinet') continue;
     if (excludeId && node.id === excludeId) continue;
-    // PR-1: drop-onto-rotated-cabinet uses the default interior position
-    // (see snapToCabinetInterior). Still hit-test rotated cabinets so the
-    // candidate-parent highlight works; the adoption math itself is just
-    // simplified for the rotated case.
     const aabb = query.aabbOf(node.id);
     const t = rayAabbEntryT(
       origin,
@@ -228,38 +269,28 @@ function rayAabbEntryT(
 
 /**
  * Snap a free-floating drag position to the interior of a cabinet — what
- * the part will look like once adopted. Centres X/Z on the cabinet and
- * clamps Y to the interior so the user sees the shelf sit inside the cabinet
- * during the drag, matching what `adopt()` will compute on commit.
- *
- * Rotated cabinets in PR-1: the world X/Z preview would have to rotate
- * with the cabinet to be accurate; instead we snap to the cabinet's
- * centre at mid-height. The drop itself still adopts (the geometry recompute
- * inside `adopt()` will place the child correctly), it's only the drag
- * preview that's simplified.
+ * the part will look like once adopted. Returns the cabinet's WORLD centre
+ * X/Z with Y clamped to the interior range so the user sees the shelf sit
+ * inside the cabinet during the drag.
  */
 export function snapToCabinetInterior(
   cabinet: SceneNode & { type: 'cabinet' },
+  query: SceneQuery,
   worldY: number,
 ): readonly [number, number, number] {
   const cab = cabinet.params;
+  const cabWorld = query.worldTransform(cabinet.id).translation;
   const halfT = cab.thickness / 2;
-  const yMin = cab.position[1] + cab.thickness + halfT;
-  const yMax = cab.position[1] + cab.height - cab.thickness - halfT;
-  if (isRotated(cab.rotation)) {
-    return [cab.position[0], (yMin + yMax) / 2, cab.position[2]];
-  }
+  const yMin = cabWorld[1] + cab.thickness + halfT;
+  const yMax = cabWorld[1] + cab.height - cab.thickness - halfT;
   const clampedY = clamp(worldY, yMin, yMax);
-  return [cab.position[0], clampedY, cab.position[2]];
+  return [cabWorld[0], clampedY, cabWorld[2]];
 }
 
 /**
  * Source snippet for adopting `node` into a cabinet at cabinet-floor-
- * relative `cabRelY`. Derived from the node's `adoptionInput` (its
- * authoring shape), so any non-default fields the user set on a
- * standalone part — door side, drawer height, shelf inset — survive the
- * adoption. Returns null for nodes that can't be adopted today (cabinets,
- * panels). Distance values are rounded to 0.1 mm for source readability.
+ * relative `cabRelY`. Same shape as before; the source still uses the
+ * simple `y: number` form for adoptable parts.
  */
 export function snippetForAdoption(node: SceneNode, cabRelY: number): string | null {
   switch (node.type) {
@@ -295,37 +326,42 @@ export function clamp(value: number, min: number, max: number): number {
 
 /**
  * Given a drag spec and a proposed world position (in millimetres), compute
- * the (property, value) pair that should be written back to the source.
- * Caller then passes both into `setSelectionParam(name, value)`.
+ * the (property, value) pair to write back to source.
+ *
+ *   - `positionArray`: project the world point into the parent's local
+ *     frame via `parentInverseWorld`, honour disabled axes by restoring
+ *     the original local component, clamp local Y if bounds are set,
+ *     emit `position: [x, y, z]`.
+ *   - `yScalar`: subtract parent floor world-Y to get cabinet-local Y
+ *     (valid only for unrotated parents), clamp, emit `y: number`.
  */
 export function projectDragToSource(
   spec: DragSpec,
   proposed: readonly [number, number, number],
 ): { readonly name: 'position' | 'y'; readonly value: number | readonly number[] } {
   if (spec.write.kind === 'positionArray') {
-    // Free 3D / floor-plane drag. Y is locked to the original position when
-    // the cabinet drag is axes={x,z} (we honour spec.axes by snapping each
-    // disabled axis back to its original).
-    const x = spec.axes.x ? proposed[0] : spec.originalWorld[0];
-    const y = spec.axes.y ? proposed[1] : spec.write.originalY;
-    const z = spec.axes.z ? proposed[2] : spec.originalWorld[2];
+    const localProposed = transformPoint(spec.write.parentInverseWorld, proposed);
+    let lx = spec.axes.x ? localProposed[0] : spec.write.originalLocal[0];
+    let ly = spec.axes.y ? localProposed[1] : spec.write.originalLocal[1];
+    let lz = spec.axes.z ? localProposed[2] : spec.write.originalLocal[2];
+    if (spec.yBounds) ly = clamp(ly, spec.yBounds.min, spec.yBounds.max);
     return {
       name: 'position',
-      value: [round1(x), round1(y), round1(z)] as const,
+      value: [round1(lx), round1(ly), round1(lz)] as const,
     };
   }
-  // yScalar: write a cabinet-floor-relative y. `proposed[1]` is world Y;
-  // subtract the parent's floor world Y to get the local y. Apply clamp.
-  let localY = proposed[1] - spec.write.parentFloorY;
+  // yScalar: project the proposed world point into the parent's local
+  // frame and take Y. Works for rotated parents because the inverse
+  // world matrix maps world deltas onto the parent's local axes.
+  const localProposed = transformPoint(spec.write.parentInverseWorld, proposed);
+  let localY = localProposed[1];
   if (spec.yBounds) localY = clamp(localY, spec.yBounds.min, spec.yBounds.max);
   return { name: 'y', value: round1(localY) };
 }
 
 /**
  * Round to 1 decimal place (0.1 mm precision). Keeps the rewritten source
- * readable — `position: [123.4, 0, 200.7]` instead of `[123.456789, 0,
- * 200.731234]` — and makes drag-commits deterministic for tests. Real
- * cabinet making works in millimetres; tenths are plenty.
+ * readable and makes drag-commits deterministic for tests.
  */
 function round1(n: number): number {
   return Math.round(n * 10) / 10;

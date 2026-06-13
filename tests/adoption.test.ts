@@ -177,7 +177,7 @@ describe('snapToCabinetInterior', () => {
     const cab = result.nodes[0];
     if (cab.type !== 'cabinet') throw new Error('expected cabinet');
     // Cursor world Y way past the interior top → snaps to interior max.
-    const snapped = snapToCabinetInterior(cab, 99999);
+    const snapped = snapToCabinetInterior(cab, queryOf(result), 99999);
     expect(snapped[0]).toBe(100); // cabinet x
     expect(snapped[2]).toBe(200); // cabinet z
     const halfT = 9;

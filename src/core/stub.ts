@@ -25,6 +25,14 @@ const defaultTransform = (t?: Partial<Transform>): Transform => ({
  * In-memory BREP stand-in. The CoreAPI shape is what matters — the implementation
  * just records operations and emits a box mesh per solid so the viewer has
  * something to draw. Replaced with a ClassCAD-backed kernel later.
+ *
+ * Frames of reference: the kernel has no concept of "world" — every
+ * `transform` it receives is in the owning SceneNode's local frame, and
+ * `snapshot().transform / aabb` are returned in that same frame. Scene-graph
+ * composition (cabinet rotates its panels, which rotate their child
+ * geometry) happens above the kernel, in the SceneQuery and the viewer's
+ * nested groups. This keeps `core.snapshot(id)` cache-stable: a parent
+ * edit doesn't invalidate any snapshot.
  */
 export function createStubCore(): CoreAPI {
   const ops = new Map<SolidId, StubOp>();
