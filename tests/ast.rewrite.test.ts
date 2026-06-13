@@ -144,10 +144,20 @@ describe('rewriteCallProperty', () => {
     );
   });
 
-  it('returns the source unchanged when the property is missing', () => {
+  it('inserts the property when it is missing on a non-empty object', () => {
+    // The exact whitespace around the insertion is incidental — what matters
+    // is that the resulting source parses and contains the new property.
     const src = `api.cabinet({ width: 800 });`;
     const range = firstApiCallRange(src);
-    expect(rewriteCallProperty(src, range, 'height', 1800)).toBe(src);
+    const out = rewriteCallProperty(src, range, 'height', 1800);
+    expect(out).toMatch(/width:\s*800\s*,\s*height:\s*1800\s*\}/);
+  });
+
+  it('inserts the property when the call object is empty', () => {
+    const src = `api.cabinet({});`;
+    const range = firstApiCallRange(src);
+    const out = rewriteCallProperty(src, range, 'rotation', [0, 90, 0]);
+    expect(out).toMatch(/\{\s*rotation:\s*\[0, 90, 0\]\s*\}/);
   });
 
   it('returns the source unchanged for unparseable input', () => {

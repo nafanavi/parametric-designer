@@ -165,7 +165,6 @@ export class ModelEvaluationSession {
     };
 
     try {
-      // eslint-disable-next-line no-new-func
       const fn = new Function('api', 'param', '__withLoc', instrumented);
       fn(this.api, this.param, withLoc);
     } catch (err) {

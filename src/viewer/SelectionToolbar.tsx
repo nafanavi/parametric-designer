@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Html } from '@react-three/drei';
 import { GripVertical, RotateCcw, RotateCw, Trash2 } from 'lucide-react';
 import { useModelStore } from '@/store/modelStore';
@@ -39,11 +39,10 @@ export function SelectionToolbar({ hidden }: Props) {
     moved: boolean;
   } | null>(null);
 
-  // Reset offset on selection change so the toolbar snaps back to its anchor
-  // for each new pick.
-  useEffect(() => {
-    setDragOffset([0, 0]);
-  }, [selection]);
+  // Selection-change reset is handled by the parent passing `key={selection}`
+  // — a fresh selection remounts this component and naturally re-initializes
+  // `dragOffset` to [0, 0]. That avoids a `useEffect(setState)` pattern that
+  // React 19's compiler-aware lint flags as a cascading render risk.
 
   if (!selection || hidden) return null;
 
