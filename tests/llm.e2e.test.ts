@@ -15,7 +15,7 @@
  * Each test allocates ~30s; full run usually completes in ~10–20s on Groq.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { generateText } from 'ai';
+import { generateText, stepCountIs } from 'ai';
 import { SYSTEM_PROMPT, buildUserPrompt } from '@/model/llm/prompt';
 import { extractCode } from '@/model/llm/extract';
 import { buildSceneTools } from '@/model/llm/tools';
@@ -93,7 +93,7 @@ describe.skipIf(!e2eEnabled)('llm e2e — real provider', () => {
       system: SYSTEM_PROMPT,
       prompt: buildUserPrompt(source, prompt),
       tools,
-      maxSteps: 6,
+      stopWhen: stepCountIs(6),
       temperature: 0,
     });
 

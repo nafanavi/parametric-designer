@@ -1,6 +1,13 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+
+/* Custom design tokens — Tailwind v4 reads `@theme` directly from CSS, no
+   tailwind.config.ts required. The `--color-*` names below become the
+   `bg-panel`, `bg-panel-2`, `border-border` utilities used across the editor. */
+@theme {
+  --color-panel: #1f2125;
+  --color-panel-2: #2a2d33;
+  --color-border: #3a3d44;
+}
 
 html,
 body,

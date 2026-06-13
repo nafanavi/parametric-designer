@@ -144,10 +144,20 @@ describe('rewriteCallProperty', () => {
     );
   });
 
-  it('returns the source unchanged when the property is missing', () => {
+  it('inserts the property when it is missing on a non-empty object', () => {
+    // The exact whitespace around the insertion is incidental — what matters
+    // is that the resulting source parses and contains the new property.
     const src = `api.cabinet({ width: 800 });`;
     const range = firstApiCallRange(src);
-    expect(rewriteCallProperty(src, range, 'height', 1800)).toBe(src);
+    const out = rewriteCallProperty(src, range, 'height', 1800);
+    expect(out).toMatch(/width:\s*800\s*,\s*height:\s*1800\s*\}/);
+  });
+
+  it('inserts the property when the call object is empty', () => {
+    const src = `api.cabinet({});`;
+    const range = firstApiCallRange(src);
+    const out = rewriteCallProperty(src, range, 'rotation', [0, 90, 0]);
+    expect(out).toMatch(/\{\s*rotation:\s*\[0, 90, 0\]\s*\}/);
   });
 
   it('returns the source unchanged for unparseable input', () => {
@@ -402,6 +412,33 @@ describe('removeCallStatement', () => {
       const out = removeCallStatement(src, shelfRange);
       expect(out).not.toContain('api.shelf');
       expect(out).toContain('api.cabinet(');
+    });
+
+    // Regression for the "[, ]" hole bug: deleting the sole element of a
+    // multi-line children array with a trailing comma must consume that
+    // comma too. Otherwise the resulting array literal parses as a hole
+    // (`[undefined]`), the runtime hands `undefined` to `ctx.adopt`, and
+    // the user sees a 'Cannot read parentId of undefined' crash that gets
+    // forwarded to LLM repair for what should be a clean delete.
+    it('removes a sole multi-line child and leaves no hole in the array', () => {
+      const src =
+        `api.cabinet({\n` +
+        `  width: 800, position: [0, 0, 0], rotation: [0, 90, 0],\n` +
+        `  children: [\n` +
+        `    api.shelf({ y: 459 }),\n` +
+        `  ],\n` +
+        `});\n`;
+      const shelfStart = src.indexOf('api.shelf');
+      const shelfRange = {
+        start: shelfStart,
+        end: shelfStart + `api.shelf({ y: 459 })`.length,
+      };
+      const out = removeCallStatement(src, shelfRange);
+      expect(out).not.toContain('api.shelf');
+      // The array literal must not contain a stray standalone comma — that
+      // would parse as an array hole.
+      const arrayLiteral = out.slice(out.indexOf('['), out.indexOf(']') + 1);
+      expect(arrayLiteral).not.toMatch(/\[\s*,/);
     });
   });
 });

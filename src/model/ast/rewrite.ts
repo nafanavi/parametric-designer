@@ -406,7 +406,14 @@ export function findEnclosingArrayElement(
   const realElements = elements.filter((e): e is Node => e !== null);
 
   if (realElements.length === 1) {
-    return { start: element.start, end: element.end };
+    // Sole element: also eat a trailing comma if the source has one (common
+    // in multi-line arrays). Leaving it behind makes `[ , ]` — a hole — and
+    // hands the parent a `[undefined]` children array, which crashes
+    // downstream consumers that dereference `child.parentId`.
+    let end = element.end;
+    while (end < source.length && /\s/.test(source[end])) end++;
+    if (source[end] === ',') end++;
+    return { start: element.start, end };
   }
 
   // Find the index in the "real elements" sub-list. We treat null holes as

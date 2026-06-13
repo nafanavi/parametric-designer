@@ -1,5 +1,5 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import type { LanguageModelV1 } from 'ai';
+import type { LanguageModel } from 'ai';
 
 export interface ProviderEnv {
   readonly LLM_PROVIDER?: string;
@@ -9,7 +9,7 @@ export interface ProviderEnv {
 }
 
 export interface ProviderSelection {
-  readonly model: LanguageModelV1;
+  readonly model: LanguageModel;
   readonly modelId: string;
   readonly providerName: string;
 }
